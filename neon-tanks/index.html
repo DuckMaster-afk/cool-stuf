@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Tanks 2P</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: '-apple-system', BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #040406;
+            color: #fafafa;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            padding: 20px;
+        }
+        .top-bar {
+            width: 700px;
+            max-width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .back-btn {
+            color: #9d4edd;
+            text-decoration: none;
+            font-weight: 500;
+            border: 1px solid #9d4edd;
+            padding: 6px 14px;
+            border-radius: 20px;
+            box-shadow: 0 0 8px rgba(157, 78, 221, 0.2);
+            transition: all 0.2s ease;
+        }
+        .back-btn:hover {
+            background-color: #9d4edd;
+            color: #040406;
+            box-shadow: 0 0 15px #9d4edd;
+        }
+        .score-board {
+            font-size: 1.4rem;
+            letter-spacing: 2px;
+            font-weight: bold;
+        }
+        #p1-score { color: #00adb5; }
+        #p2-score { color: #ff2e93; }
+        canvas {
+            background-color: #09090e;
+            border: 1px solid #1a1a26;
+            border-radius: 12px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
+            max-height: 65vh;
+            max-width: 100%;
+            width: auto;
+        }
+        .controls-guide {
+            margin-top: 15px;
+            font-size: 0.85rem;
+            color: #666;
+            text-align: center;
+            display: flex;
+            gap: 50px;
+        }
+        .p1-keys { color: #00adb5; }
+        .p2-keys { color: #ff2e93; }
+    </style>
+</head>
+<body>
+
+    <div class="top-bar">
+        <a href="../index.html" class="back-btn">← Leave Zone</a>
+        <div class="score-board">
+            <span id="p1-score">0</span> — <span id="p2-score">0</span>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas" width="700" height="480"></canvas>
+
+    <div class="controls-guide">
+        <div class="p1-keys"><b>Player 1 (Cyan):</b> WASD to Move, <b>SPACEBAR</b> to Fire</div>
+        <div class="p2-keys"><b>Player 2 (Pink):</b> ARROW KEYS to Move, <b>ENTER</b> to Fire</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const p1ScoreEl = document.getElementById("p1-score");
+        const p2ScoreEl = document.getElementById("p2-score");
+
+        let p1Score = 0;
+        let p2Score = 0;
+        let gameOver = false;
+        let winnerText = "";
+
+        // Game objects
+        let p1, p2;
+        let bullets = [];
+        let particles = [];
+        let keys = {};
+
+        function initMatch() {
+            p1 = { x: 60, y: canvas.height / 2, angle: 0, speed: 2.2, turnSpeed: 0.05, radius: 14, color: "#00adb5", lastShot: 0, alive: true };
+            p2 = { x: canvas.width - 60, y: canvas.height / 2, angle: Math.PI, speed: 2.2, turnSpeed: 0.05, radius: 14, color: "#ff2e93", lastShot: 0, alive: true };
+            bullets = [];
+            particles = [];
+            gameOver = false;
+            winnerText = "";
+        }
+
+        window.addEventListener("keydown", e => {
+            keys[e.key.toLowerCase()] = true;
+            if(["space", " ", "arrowup", "arrowdown", "arrowleft", "arrowright", "enter"].includes(e.key)) e.preventDefault();
+            if(e.key === "r" && gameOver) initMatch();
+        });
+        window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+
+        function fireBullet(tank) {
+            let now = Date.now();
+            if (now - tank.lastShot < 600) return; // Reload cooldown rate limit
+            tank.lastShot = now;
+
+            bullets.push({
+                x: tank.x + Math.cos(tank.angle) * 18,
+                y: tank.y + Math.sin(tank.angle) * 18,
+                vx: Math.cos(tank.angle) * 5,
+                vy: Math.sin(tank.angle) * 5,
+                radius: 3,
+                color: tank.color,
+                bounces: 0,
+                owner: tank
+            });
+        }
+
+        function createExplosion(x, y, color) {
+            for(let i=0; i<15; i++) {
+                let pAngle = Math.random() * Math.PI * 2;
+                let pSpeed = Math.random() * 3 + 1;
+                particles.push({
+                    x: x, y: y,
+                    vx: Math.cos(pAngle) * pSpeed,
+                    vy: Math.sin(pAngle) * pSpeed,
+                    alpha: 1,
+                    decay: Math.random() * 0.03 + 0.015,
+                    color: color
+                });
+            }
+        }
+
+        function update() {
+            ctx.fillStyle = "#09090e";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (!gameOver) {
+                // --- PLAYER 1 HANDLING (WASD + Space) ---
+                if (keys['w']) {
+                    p1.x += Math.cos(p1.angle) * p1.speed;
+                    p1.y += Math.sin(p1.angle) * p1.speed;
+                }
+                if (keys['s']) {
+                    p1.x -= Math.cos(p1.angle) * p1.speed;
+                    p1.y -= Math.sin(p1.angle) * p1.speed;
+                }
+                if (keys['a']) p1.angle -= p1.turnSpeed;
+                if (keys['d']) p1.angle += p1.turnSpeed;
+                if (keys[' ']) fireBullet(p1);
+
+                // --- PLAYER 2 HANDLING (Arrows + Enter) ---
+                if (keys['arrowup']) {
+                    p2.x += Math.cos(p2.angle) * p2.speed;
+                    p2.y += Math.sin(p2.angle) * p2.speed;
+                }
+                if (keys['arrowdown']) {
+                    p2.x -= Math.cos(p2.angle) * p2.speed;
+                    p2.y -= Math.sin(p2.angle) * p2.speed;
+                }
+                if (keys['arrowleft']) p2.angle -= p2.turnSpeed;
+                if (keys['arrowright']) p2.angle += p2.turnSpeed;
+                if (keys['enter']) fireBullet(p2);
+
+                // Keep tanks inside limits bounds clipping
+                [p1, p2].forEach(p => {
+                    if (p.x < p.radius) p.x = p.radius;
+                    if (p.x > canvas.width - p.radius) p.x = canvas.width - p.radius;
+                    if (p.y < p.radius) p.y = p.radius;
+                    if (p.y > canvas.height - p.radius) p.y = canvas.height - p.radius;
+                });
+
+                // --- BULLET KINEMATICS & BOUNCING ---
+                for (let i = bullets.length - 1; i >= 0; i--) {
+                    let b = bullets[i];
+                    b.x += b.vx;
+                    b.y += b.vy;
+
+                    // Wall bouncing logic parameter maps
+                    if (b.x - b.radius < 0 || b.x + b.radius > canvas.width) {
+                        b.vx = -b.vx; b.bounces++;
+                    }
+                    if (b.y - b.radius < 0 || b.y + b.radius > canvas.height) {
+                        b.vy = -b.vy; b.bounces++;
+                    }
+
+                    // Remove spent bullets after 2 bounces
+                    if (b.bounces > 2) {
+                        bullets.splice(i, 1);
+                        continue;
+                    }
+
+                    // Hit checks against Tank 1
+                    if (p1.alive && Math.hypot(b.x - p1.x, b.y - p1.y) < p1.radius) {
+                        createExplosion(p1.x, p1.y, p1.color);
+                        p1.alive = false;
+                        p2Score++;
+                        p2ScoreEl.innerText = p2Score;
+                        winnerText = "PINK WINS";
+                        gameOver = true;
+                        bullets.splice(i, 1);
+                        continue;
+                    }
+
+                    // Hit checks against Tank 2
+                    if (p2.alive && Math.hypot(b.x - p2.x, b.y - p2.y) < p2.radius) {
+                        createExplosion(p2.x, p2.y, p2.color);
+                        p2.alive = false;
+                        p1Score++;
+                        p1ScoreEl.innerText = p1Score;
+                        winnerText = "CYAN WINS";
+                        gameOver = true;
+                        bullets.splice(i, 1);
+                        continue;
+                    }
+                }
+            }
+
+            // --- RENDER VEHICLES ---
+            [p1, p2].forEach(p => {
+                if (!p.alive) return;
+                ctx.save();
+                ctx.translate(p.x, p.y);
+                ctx.rotate(p.angle);
+                
+                ctx.strokeStyle = p.color;
+                ctx.shadowBlur = 12;
+                ctx.shadowColor = p.color;
+                ctx.lineWidth = 2.5;
+                
+                // Chassis shell hull
+                ctx.strokeRect(-12, -10, 24, 20);
+                // Turret barrel mount line array pointer
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(16, 0);
+                ctx.stroke();
+                
+                ctx.restore();
+            });
+            ctx.shadowBlur = 0;
+
+            // --- RENDER BULLETS ---
+            bullets.forEach(b => {
+                ctx.fillStyle = b.color;
+                ctx.shadowBlur = 8;
+                ctx.shadowColor = b.color;
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.shadowBlur = 0;
+
+            // --- PROCESSING EXPLOSION PARTICLES EFFECTS ---
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx; p.y += p.vy;
+                p.alpha -= p.decay;
+                if (p.alpha <= 0) {
+                    particles.splice(i, 1);
+                } else {
+                    ctx.save();
+                    ctx.globalAlpha = p.alpha;
+                    ctx.fillStyle = p.color;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+            }
+
+            // --- INTERRUPT DRAW STATES PANEL OVERLAYS ---
+            if (gameOver) {
+                ctx.fillStyle = "rgba(4, 4, 6, 0.88)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.textAlign = "center";
+                ctx.fillStyle = (winnerText === "CYAN WINS") ? "#00adb5" : "#ff2e93";
+                ctx.font = "bold 32px sans-serif";
+                ctx.fillText(winnerText, canvas.width / 2, canvas.height / 2 - 10);
+                ctx.font = "14px sans-serif";
+                ctx.fillStyle = "#8888aa";
+                ctx.fillText("PRESS 'R' KEY FOR A NEW COMBAT ENCOUNTER", canvas.width / 2, canvas.height / 2 + 35);
+            }
+
+            requestAnimationFrame(update);
+        }
+
+        initMatch();
+        update();
+    </script>
+</body>
+</html>

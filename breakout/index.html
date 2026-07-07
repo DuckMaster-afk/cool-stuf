@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retro Brick Breaker</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #1a0f2e; /* Deep purple/dark background */
+            color: #e0d7ff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            padding: 20px;
+        }
+        .top-bar {
+            width: 480px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .back-btn {
+            color: #e0d7ff;
+            text-decoration: none;
+            font-weight: bold;
+            border: 2px solid #e0d7ff;
+            padding: 5px 10px;
+            border-radius: 4px;
+        }
+        .back-btn:hover {
+            background-color: #e0d7ff;
+            color: #1a0f2e;
+        }
+        .score-board {
+            font-size: 1.4rem;
+            font-weight: bold;
+        }
+        canvas {
+            background-color: #120a21; /* Very dark purple canvas */
+            border: 6px solid #4a2c7a;
+            border-radius: 4px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.5);
+        }
+        .controls {
+            margin-top: 15px;
+            font-size: 0.9rem;
+            color: #a394cc;
+            text-align: center;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="top-bar">
+        <a href="../index.html" class="back-btn">⬅ Home</a>
+        <div class="score-board">SCORE: <span id="score">000</span></div>
+    </div>
+
+    <canvas id="gameCanvas" width="480" height="320"></canvas>
+
+    <div class="controls">
+        Use <b>LEFT and RIGHT ARROWS</b> or <b>A and D</b> to move the paddle.<br>
+        Press <b>SPACEBAR</b> to launch the ball or restart.
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+const scoreElement = document.getElementById("score");
+
+// Game Elements
+let score = 0;
+let gameRunning = false;
+let gameOver = false;
+
+const paddleHeight = 12;
+const paddleWidth = 75;
+let paddleX = (canvas.width - paddleWidth) / 2;
+
+let rightPressed = false;
+let leftPressed = false;
+
+let ballRadius = 6;
+let x = canvas.width / 2;
+let y = canvas.height - 30;
+let baseSpeed = 4; // Total speed magnitude
+let dx = 3;
+let dy = -3;
+
+// Bricks configuration
+const brickRowCount = 4;
+const brickColumnCount = 6;
+const brickWidth = 65;
+const brickHeight = 16;
+const brickPadding = 8;
+const brickOffsetTop = 30;
+const brickOffsetLeft = 23;
+
+const brickColors = ["#ff4a4a", "#ff9800", "#ffeb3b", "#4caf50"];
+
+let bricks = [];
+function initBricks() {
+    for (let c = 0; c < brickColumnCount; c++) {
+        bricks[c] = [];
+        for (let r = 0; r < brickRowCount; r++) {
+            bricks[c][r] = { x: 0, y: 0, status: 1, color: brickColors[r] };
+        }
+    }
+}
+initBricks();
+
+// Control listeners
+window.addEventListener("keydown", e => {
+    if(["Space", " ", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+        e.preventDefault();
+    }
+    if (e.key === "Right" || e.key === "ArrowRight" || e.key === "d") rightPressed = true;
+    if (e.key === "Left" || e.key === "ArrowLeft" || e.key === "a") leftPressed = true;
+    if ((e.key === " " || e.key === "Spacebar") && !gameRunning) {
+        if (gameOver) resetGame();
+        else gameRunning = true;
+    }
+});
+
+window.addEventListener("keyup", e => {
+    if (e.key === "Right" || e.key === "ArrowRight" || e.key === "d") rightPressed = false;
+    if (e.key === "Left" || e.key === "ArrowLeft" || e.key === "a") leftPressed = false;
+});
+
+function collisionDetection() {
+    for (let c = 0; c < brickColumnCount; c++) {
+        for (let r = 0; r < brickRowCount; r++) {
+            let b = bricks[c][r];
+            if (b.status === 1) {
+                if (x > b.x && x < b.x + brickWidth && y > b.y && y < b.y + brickHeight) {
+                    dy = -dy;
+                    b.status = 0;
+                    score += 10;
+                    scoreElement.innerText = String(score).padStart(3, '0');
+                    
+                    if (score === brickRowCount * brickColumnCount * 10) {
+                        gameRunning = false;
+                        gameOver = true;
+                    }
+                }
+            }
+        }
+    }
+}
+
+function drawBall() {
+    ctx.beginPath();
+    ctx.arc(x, y, ballRadius, 0, Math.PI * 2);
+    ctx.fillStyle = "#e0d7ff";
+    ctx.fill();
+    ctx.closePath();
+}
+
+function drawPaddle() {
+    ctx.beginPath();
+    ctx.rect(paddleX, canvas.height - paddleHeight - 5, paddleWidth, paddleHeight);
+    ctx.fillStyle = "#a394cc";
+    ctx.fill();
+    ctx.closePath();
+}
+
+function drawBricks() {
+    for (let c = 0; c < brickColumnCount; c++) {
+        for (let r = 0; r < brickRowCount; r++) {
+            if (bricks[c][r].status === 1) {
+                let brickX = (c * (brickWidth + brickPadding)) + brickOffsetLeft;
+                let brickY = (r * (brickHeight + brickPadding)) + brickOffsetTop;
+                bricks[c][r].x = brickX;
+                bricks[c][r].y = brickY;
+                ctx.beginPath();
+                ctx.rect(brickX, brickY, brickWidth, brickHeight);
+                ctx.fillStyle = bricks[c][r].color;
+                ctx.fill();
+                ctx.closePath();
+            }
+        }
+    }
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawBricks();
+    drawBall();
+    drawPaddle();
+    collisionDetection();
+
+    if (!gameRunning) {
+        ctx.fillStyle = "rgba(26, 15, 46, 0.85)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.textAlign = "center";
+        
+        if (gameOver) {
+            if (score === brickRowCount * brickColumnCount * 10) {
+                ctx.fillStyle = "#4caf50";
+                ctx.font = "bold 26px 'Courier New'";
+                ctx.fillText("YOU WIN!", canvas.width / 2, canvas.height / 2);
+            } else {
+                ctx.fillStyle = "#ff4a4a";
+                ctx.font = "bold 26px 'Courier New'";
+                ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2);
+            }
+            ctx.font = "14px 'Courier New'";
+            ctx.fillStyle = "#e0d7ff";
+            ctx.fillText("PRESS SPACEBAR TO RESTART", canvas.width / 2, canvas.height / 2 + 30);
+        } else {
+            ctx.fillStyle = "#a394cc";
+            ctx.font = "bold 16px 'Courier New'";
+            ctx.fillText("PRESS SPACEBAR TO LAUNCH BALL", canvas.width / 2, canvas.height / 2);
+        }
+        requestAnimationFrame(draw);
+        return;
+    }
+
+    // Wall bouncing
+    if (x + dx > canvas.width - ballRadius || x + dx < ballRadius) dx = -dx;
+    if (y + dy < ballRadius) dy = -dy;
+    
+    // Paddle collision check
+    else if (y + dy > canvas.height - ballRadius - paddleHeight - 5) {
+        if (x > paddleX && x < paddleX + paddleWidth) {
+            // Find relative hit point on paddle (ranges from -1 at left edge to 1 at right edge)
+            let hitPoint = (x - (paddleX + paddleWidth / 2)) / (paddleWidth / 2);
+            
+            // Limit extreme angles so it doesn't fly perfectly sideways
+            let maxAngle = 60 * Math.PI / 180; 
+            let angle = hitPoint * maxAngle;
+            
+            // Recalculate speeds based on the hit angle
+            dx = baseSpeed * Math.sin(angle);
+            dy = -baseSpeed * Math.cos(angle);
+        } else if (y + dy > canvas.height - ballRadius) {
+            gameRunning = false;
+            gameOver = true;
+        }
+    }
+
+    // Paddle movement
+    if (rightPressed && paddleX < canvas.width - paddleWidth) paddleX += 6;
+    else if (leftPressed && paddleX > 0) paddleX -= 6;
+
+    x += dx;
+    y += dy;
+    requestAnimationFrame(draw);
+}
+
+function resetGame() {
+    score = 0;
+    scoreElement.innerText = "000";
+    gameOver = false;
+    gameRunning = true;
+    x = canvas.width / 2;
+    y = canvas.height - 30;
+    dx = 0;
+    dy = -baseSpeed; // Shoot straight up initially
+    paddleX = (canvas.width - paddleWidth) / 2;
+    initBricks();
+}
+
+draw();
+    </script>
+</body>
+</html>

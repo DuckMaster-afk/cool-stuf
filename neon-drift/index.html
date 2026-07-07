@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Drift Chase</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: '-apple-system', BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #040406;
+            color: #fafafa;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            padding: 20px;
+        }
+        .top-bar {
+            width: 600px;
+            max-width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .back-btn {
+            color: #00adb5;
+            text-decoration: none;
+            font-weight: 500;
+            border: 1px solid #00adb5;
+            padding: 6px 14px;
+            border-radius: 20px;
+            box-shadow: 0 0 8px rgba(0, 173, 181, 0.2);
+            transition: all 0.2s ease;
+        }
+        .back-btn:hover {
+            background-color: #00adb5;
+            color: #040406;
+            box-shadow: 0 0 15px #00adb5;
+        }
+        .score-board {
+            font-size: 1.2rem;
+            letter-spacing: 1px;
+            color: #888;
+        }
+        .score-board span {
+            color: #fff;
+            font-weight: bold;
+        }
+        canvas {
+            background-color: #09090e;
+            border: 1px solid #1a1a26;
+            border-radius: 12px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
+            max-height: 65vh;
+            max-width: 100%;
+            width: auto;
+        }
+        .controls {
+            margin-top: 15px;
+            font-size: 0.9rem;
+            color: #555566;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="top-bar">
+        <a href="../index.html" class="back-btn">← Leave Zone</a>
+        <div class="score-board">SCORE: <span id="score">0</span></div>
+    </div>
+
+    <canvas id="gameCanvas" width="600" height="500"></canvas>
+
+    <div class="controls">
+        Use <b>A / D</b> or <b>LEFT / RIGHT ARROWS</b> to steer and drift.<br>
+        Make the cops crash into each other! Press <b>SPACEBAR</b> to restart.
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const scoreElement = document.getElementById("score");
+
+        let score = 0;
+        let gameRunning = true;
+
+        // Player configuration (Top-down physics)
+        let player = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            angle: 0,
+            speed: 3.5,
+            turnSpeed: 0.07,
+            radius: 8
+        };
+
+        let enemies = [];
+        let particles = [];
+        let keys = {};
+        let spawnTimer = 0;
+
+        window.addEventListener("keydown", e => { 
+            keys[e.key.toLowerCase()] = true; 
+            if(["space", " ", "arrowleft", "arrowright"].includes(e.key)) e.preventDefault();
+            if((e.key === " " || e.key === "Spacebar") && !gameRunning) resetGame();
+        });
+        window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+
+        function spawnEnemy() {
+            if (!gameRunning) return;
+            // Spawn cops right outside the screen edges
+            let edge = Math.floor(Math.random() * 4);
+            let ex, ey;
+            if(edge === 0) { ex = Math.random() * canvas.width; ey = -20; }
+            else if(edge === 1) { ex = canvas.width + 20; ey = Math.random() * canvas.height; }
+            else if(edge === 2) { ex = Math.random() * canvas.width; ey = canvas.height + 20; }
+            else { ex = -20; ey = Math.random() * canvas.height; }
+
+            enemies.push({
+                x: ex,
+                y: ey,
+                angle: 0,
+                speed: 2.8, // Slightly slower than player so you can out-turn them
+                turnSpeed: 0.04,
+                radius: 8
+            });
+        }
+
+        function spawnExplosion(x, y, color) {
+            for(let i = 0; i < 10; i++) {
+                let pAngle = Math.random() * Math.PI * 2;
+                let pSpeed = Math.random() * 2 + 1;
+                particles.push({
+                    x: x, y: y,
+                    vx: Math.cos(pAngle) * pSpeed,
+                    vy: Math.sin(pAngle) * pSpeed,
+                    alpha: 1,
+                    decay: Math.random() * 0.03 + 0.02,
+                    color: color
+                });
+            }
+        }
+
+        function update() {
+            // Motion blur trail effect
+            ctx.fillStyle = "rgba(9, 9, 14, 0.2)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (gameRunning) {
+                // 1. Handle Player Steering
+                if (keys['a'] || keys['arrowleft']) player.angle -= player.turnSpeed;
+                if (keys['d'] || keys['arrowright']) player.angle += player.turnSpeed;
+
+                // Move player forward based on angle
+                player.x += Math.cos(player.angle) * player.speed;
+                player.y += Math.sin(player.angle) * player.speed;
+
+                // Screen wrapping (like Scratch borders or open arenas)
+                if (player.x < 0) player.x = canvas.width;
+                if (player.x > canvas.width) player.x = 0;
+                if (player.y < 0) player.y = canvas.height;
+                if (player.y > canvas.height) player.y = 0;
+
+                // 2. Draw Player Car (Neon Cyan)
+                ctx.save();
+                ctx.translate(player.x, player.y);
+                ctx.rotate(player.angle);
+                ctx.strokeStyle = "#00adb5";
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = "#00adb5";
+                ctx.lineWidth = 2;
+                ctx.strokeRect(-8, -5, 16, 10);
+                ctx.restore();
+
+                // 3. Enemy AI Handling (Chasing the player)
+                spawnTimer++;
+                if (spawnTimer % 90 === 0 && enemies.length < 8) {
+                    spawnEnemy();
+                }
+
+                for (let i = enemies.length - 1; i >= 0; i--) {
+                    let e = enemies[i];
+
+                    // Calculate angle to player
+                    let targetAngle = Math.atan2(player.y - e.y, player.x - e.x);
+                    
+                    // Smoothly rotate enemy towards target angle
+                    let angleDiff = targetAngle - e.angle;
+                    // Normalize angle to -PI to PI
+                    angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
+                    
+                    if (angleDiff > 0) e.angle += e.turnSpeed;
+                    if (angleDiff < 0) e.angle -= e.turnSpeed;
+
+                    // Move enemy forward
+                    e.x += Math.cos(e.angle) * e.speed;
+                    e.y += Math.sin(e.angle) * e.speed;
+
+                    // Draw Enemy Cop Car (Neon Red/Blue flashing style)
+                    ctx.save();
+                    ctx.translate(e.x, e.y);
+                    ctx.rotate(e.angle);
+                    let copColor = (spawnTimer % 20 < 10) ? "#ef4444" : "#3b82f6";
+                    ctx.strokeStyle = copColor;
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = copColor;
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(-8, -5, 16, 10);
+                    ctx.restore();
+
+                    // Check Player Collision (Game Over)
+                    let distToPlayer = Math.hypot(player.x - e.x, player.y - e.y);
+                    if (distToPlayer < player.radius + e.radius) {
+                        spawnExplosion(player.x, player.y, "#00adb5");
+                        gameRunning = false;
+                    }
+
+                    // Check Enemy-Enemy Collisions (Cops smashing into each other)
+                    for (let j = enemies.length - 1; j >= 0; j--) {
+                        if (i !== j) {
+                            let other = enemies[j];
+                            let distToOther = Math.hypot(other.x - e.x, other.y - e.y);
+                            if (distToOther < e.radius + other.radius) {
+                                spawnExplosion(e.x, e.y, "#ef4444");
+                                // Remove both cars
+                                enemies.splice(Math.max(i, j), 1);
+                                enemies.splice(Math.min(i, j), 1);
+                                score += 100;
+                                scoreElement.innerText = score;
+                                break;
+                            }
+                        }
+                    }
+                }
+                ctx.shadowBlur = 0;
+
+                // 4. Update Particle Effects
+                for (let i = particles.length - 1; i >= 0; i--) {
+                    let p = particles[i];
+                    p.x += p.vx;
+                    p.y += p.vy;
+                    p.alpha -= p.decay;
+
+                    if (p.alpha <= 0) {
+                        particles.splice(i, 1);
+                    } else {
+                        ctx.save();
+                        ctx.globalAlpha = p.alpha;
+                        ctx.beginPath();
+                        ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+                        ctx.fillStyle = p.color;
+                        ctx.fill();
+                        ctx.restore();
+                    }
+                }
+            } else {
+                // Game Over Overlay
+                ctx.fillStyle = "rgba(4, 4, 6, 0.9)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.textAlign = "center";
+                ctx.fillStyle = "#ef4444";
+                ctx.font = "bold 26px sans-serif";
+                ctx.fillText("BUSTED", canvas.width / 2, canvas.height / 2 - 10);
+                ctx.font = "14px sans-serif";
+                ctx.fillStyle = "#8888aa";
+                ctx.fillText("PRESS SPACEBAR TO EVADE AGAIN", canvas.width / 2, canvas.height / 2 + 35);
+            }
+
+            requestAnimationFrame(update);
+        }
+
+        function resetGame() {
+            score = 0;
+            scoreElement.innerText = score;
+            player.x = canvas.width / 2;
+            player.y = canvas.height / 2;
+            player.angle = 0;
+            enemies = [];
+            particles = [];
+            spawnTimer = 0;
+            gameRunning = true;
+        }
+
+        update();
+    </script>
+</body>
+</html>
