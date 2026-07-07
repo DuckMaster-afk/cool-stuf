@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Arcade Home</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            color: #f4d068;
+        }
+        p {
+            color: #aaa;
+            margin-bottom: 40px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 25px;
+            max-width: 900px;
+            width: 100%;
+        }
+        .card {
+            background-color: #262626;
+            border: 2px solid #333;
+            border-radius: 12px;
+            padding: 40px 20px;
+            text-align: center;
+            text-decoration: none;
+            color: #fff;
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+            border-color: #f4d068;
+            box-shadow: 0 10px 20px rgba(244, 208, 104, 0.15);
+        }
+        .icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
+        }
+        .card h3 {
+            font-size: 1.3rem;
+            margin-bottom: 5px;
+        }
+        .placeholder {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .placeholder:hover {
+            transform: none;
+            border-color: #333;
+            box-shadow: none;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Arcade Dashboard</h1>
+    <p>Select a zone to start playing locally.</p>
+
+    <h2 style="color: #f4d068; margin-top: 20px; margin-bottom: 15px; width: 100%; max-width: 900px; text-align: left;">🕹️ Retro Zone</h2>
+    <div class="grid" style="margin-bottom: 40px;">
+        <a href="snake/index.html" class="card">
+            <div class="icon">🐍</div>
+            <h3>Retro Snake</h3>
+        </a>
+        <a href="breakout/index.html" class="card">
+            <div class="icon">🚀</div>
+            <h3>Brick Breaker</h3>
+        </a>
+        <a href="flappy/index.html" class="card">
+            <div class="icon">🧩</div>
+            <h3>Flappy Bird</h3>
+        </a>
+    </div>
+
+            <h2 style="color: #00adb5; margin-top: 20px; margin-bottom: 15px; width: 100%; max-width: 900px; text-align: left;">✨ Modern Zone</h2>
+    <div class="grid">
+        <a href="neon-shooter/index.html" class="card" style="border-color: #00adb5; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #00adb5;">☄️</div>
+            <h3 style="color: #00adb5;">Neon Shooter</h3>
+        </a>
+
+        <a href="neon-drift/index.html" class="card" style="border-color: #00adb5; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #00adb5;">🏎️</div>
+            <h3 style="color: #00adb5;">Neon Drift</h3>
+        </a>
+
+        <a href="cyber-pong/index.html" class="card" style="border-color: #00adb5; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #00adb5;">🏓</div>
+            <h3 style="color: #00adb5;">Cyber Pong</h3>
+        </a>
+	<a href="grid-drop/index.html" class="card" style="border-color: #00adb5; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #00adb5;">🧱</div>
+            <h3 style="color: #00adb5;">Grid Drop</h3>
+        </a>
+    </div>
+
+	<h2 style="color: #9d4edd; margin-top: 30px; margin-bottom: 15px; width: 100%; max-width: 900px; text-align: left;">👥 2-Player Zone</h2>
+    <div class="grid">
+        <a href="cyber-pong-2p/index.html" class="card" style="border-color: #9d4edd; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #9d4edd;">🏓</div>
+            <h3 style="color: #9d4edd;">Cyber Pong 2P</h3>
+        </a>
+
+        <a href="neon-tanks/index.html" class="card" style="border-color: #9d4edd; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #9d4edd;">🛡️</div>
+            <h3 style="color: #9d4edd;">Neon Tanks</h3>
+        </a>
+	<a href="neon-tanks-online/index.html" class="card" style="border-color: #9d4edd; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #9d4edd;">🛡️</div>
+            <h3 style="color: #9d4edd;">Neon Tanks Online</h3>
+        </a>
+
+    </div>
+
+</body>
+</html>

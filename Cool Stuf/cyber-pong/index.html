@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cyber Pong</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: '-apple-system', BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #040406;
+            color: #fafafa;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            padding: 20px;
+        }
+        .top-bar {
+            width: 700px;
+            max-width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .back-btn {
+            color: #00adb5;
+            text-decoration: none;
+            font-weight: 500;
+            border: 1px solid #00adb5;
+            padding: 6px 14px;
+            border-radius: 20px;
+            box-shadow: 0 0 8px rgba(0, 173, 181, 0.2);
+            transition: all 0.2s ease;
+        }
+        .back-btn:hover {
+            background-color: #00adb5;
+            color: #040406;
+            box-shadow: 0 0 15px #00adb5;
+        }
+        .score-board {
+            font-size: 1.5rem;
+            letter-spacing: 2px;
+            font-weight: bold;
+        }
+        #player-score { color: #00adb5; }
+        #cpu-score { color: #ff2e93; }
+        canvas {
+            background-color: #09090e;
+            border: 1px solid #1a1a26;
+            border-radius: 12px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
+            max-height: 65vh;
+            max-width: 100%;
+            width: auto;
+        }
+        .controls {
+            margin-top: 15px;
+            font-size: 0.9rem;
+            color: #555566;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="top-bar">
+        <a href="../index.html" class="back-btn">← Leave Zone</a>
+        <div class="score-board">
+            <span id="player-score">0</span> — <span id="cpu-score">0</span>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas" width="700" height="450"></canvas>
+
+    <div class="controls">
+        Use <b>W / S</b> or <b>UP / DOWN ARROWS</b> to control your paddle.<br>
+        First to 7 points wins the match. Press <b>SPACEBAR</b> to launch or restart.
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const pScoreEl = document.getElementById("player-score");
+        const cScoreEl = document.getElementById("cpu-score");
+
+        let pScore = 0;
+        let cScore = 0;
+        let gameRunning = false;
+        let gameOver = false;
+        let winnerText = "";
+
+        // Paddle setups
+        const paddleWidth = 10;
+        const paddleHeight = 80;
+        
+        let player = { x: 20, y: canvas.height/2 - paddleHeight/2 };
+        let cpu = { x: canvas.width - 20 - paddleWidth, y: canvas.height/2 - paddleHeight/2, speed: 3.8 };
+
+        // Ball setup
+        let ball = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            radius: 7,
+            vx: 4,
+            vy: 2,
+            speed: 5.5
+        };
+
+        let keys = {};
+        window.addEventListener("keydown", e => {
+            keys[e.key.toLowerCase()] = true;
+            if(["space", " ", "arrowup", "arrowdown"].includes(e.key)) e.preventDefault();
+            if((e.key === " " || e.key === "Spacebar")) {
+                if (gameOver) resetMatch();
+                else if (!gameRunning) gameRunning = true;
+            }
+        });
+        window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+
+        function resetBall(servingToPlayer) {
+            ball.x = canvas.width / 2;
+            ball.y = canvas.height / 2;
+            ball.speed = 5.5;
+            
+            // Serve direction physics
+            let angle = (Math.random() * 40 - 20) * Math.PI / 180; 
+            ball.vx = (servingToPlayer ? -1 : 1) * ball.speed * Math.cos(angle);
+            ball.vy = ball.speed * Math.sin(angle);
+            
+            gameRunning = false;
+        }
+
+        function update() {
+            // Draw field environment setup
+            ctx.fillStyle = "#09090e";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Center Net Divider
+            ctx.strokeStyle = "rgba(26, 26, 38, 0.5)";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([10, 10]);
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, 0);
+            ctx.lineTo(canvas.width / 2, canvas.height);
+            ctx.stroke();
+            ctx.setLineDash([]); // Reset line style
+
+            if (gameRunning && !gameOver) {
+                // 1. Player Paddle Movement Bounds
+                if (keys['w'] || keys['arrowup']) player.y -= 5.5;
+                if (keys['s'] || keys['arrowdown']) player.y += 5.5;
+                if (player.y < 10) player.y = 10;
+                if (player.y > canvas.height - paddleHeight - 10) player.y = canvas.height - paddleHeight - 10;
+
+                // 2. Nerfed Adaptive AI Tracking
+                let cpuCenter = cpu.y + paddleHeight / 2;
+
+                // Introduce a small human-like reaction window: only move if the ball is on the CPU's half
+                if (ball.vx > 0) {
+                    // Add an intentional slight delay or "laziness" to the tracking
+                    let trackingSpeed = cpu.speed * 0.75; 
+                    
+                    // Give the AI a larger "comfort zone" buffer so it doesn't track perfectly
+                    if (cpuCenter < ball.y - 20) {
+                        cpu.y += trackingSpeed;
+                    } else if (cpuCenter > ball.y + 20) {
+                        cpu.y -= trackingSpeed;
+                    }
+                } else {
+                    // Return smoothly to the center of the screen when the ball is away, like a human resets
+                    let screenCenter = canvas.height / 2;
+                    if (cpuCenter < screenCenter - 10) cpu.y += 1.5;
+                    else if (cpuCenter > screenCenter + 10) cpu.y -= 1.5;
+                }
+                
+                if (cpu.y < 10) cpu.y = 10;
+                if (cpu.y > canvas.height - paddleHeight - 10) cpu.y = canvas.height - paddleHeight - 10;
+
+                // 3. Process Ball Tracking Physics
+                ball.x += ball.vx;
+                ball.y += ball.vy;
+
+                // Wall bouncing geometry mechanics
+                if (ball.y - ball.radius < 0 || ball.y + ball.radius > canvas.height) {
+                    ball.vy = -ball.vy;
+                }
+
+                // Check Paddle hits
+                let targetPaddle = (ball.vx < 0) ? player : cpu;
+                if (ball.x + ball.radius > targetPaddle.x && ball.x - ball.radius < targetPaddle.x + paddleWidth) {
+                    if (ball.y > targetPaddle.y && ball.y < targetPaddle.y + paddleHeight) {
+                        
+                        // Calculate hit point angle logic reflections
+                        let relativeIntersectY = (targetPaddle.y + (paddleHeight / 2)) - ball.y;
+                        let normalizedIntersectY = (relativeIntersectY / (paddleHeight / 2));
+                        let bounceAngle = normalizedIntersectY * (45 * Math.PI / 180);
+
+                        // Ramp up speed slightly per consecutive hit to increase dynamic tension
+                        ball.speed = Math.min(ball.speed + 0.4, 12);
+                        
+                        let direction = (ball.vx < 0) ? 1 : -1;
+                        ball.vx = direction * ball.speed * Math.cos(bounceAngle);
+                        ball.vy = ball.speed * -Math.sin(bounceAngle);
+                    }
+                }
+
+                // Score Check Points Conditions
+                if (ball.x < 0) {
+                    cScore++;
+                    cScoreEl.innerText = cScore;
+                    checkMatchState();
+                    resetBall(true);
+                } else if (ball.x > canvas.width) {
+                    pScore++;
+                    pScoreEl.innerText = pScore;
+                    checkMatchState();
+                    resetBall(false);
+                }
+            }
+
+            // Render Paddle Elements Profiles
+            // Player Paddle (Cyan Glow)
+            ctx.fillStyle = "#00adb5";
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = "#00adb5";
+            ctx.fillRect(player.x, player.y, paddleWidth, paddleHeight);
+
+            // Computer Paddle (Pink Glow)
+            ctx.fillStyle = "#ff2e93";
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = "#ff2e93";
+            ctx.fillRect(cpu.x, cpu.y, paddleWidth, paddleHeight);
+
+            // Ball Render Phase
+            if (!gameOver) {
+                ctx.fillStyle = "#fff";
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = "#fff";
+                ctx.beginPath();
+                ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.shadowBlur = 0; // Clear profiles canvas cache
+
+            // Standard Screen Overlays State Systems Management
+            if (!gameRunning || gameOver) {
+                ctx.fillStyle = "rgba(4, 4, 6, 0.85)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.textAlign = "center";
+
+                if (gameOver) {
+                    ctx.fillStyle = (winnerText === "YOU WIN") ? "#00adb5" : "#ff2e93";
+                    ctx.font = "bold 32px sans-serif";
+                    ctx.fillText(winnerText, canvas.width / 2, canvas.height / 2 - 10);
+                    ctx.font = "14px sans-serif";
+                    ctx.fillStyle = "#8888aa";
+                    ctx.fillText("PRESS SPACEBAR TO RESTART THE MATCH", canvas.width / 2, canvas.height / 2 + 35);
+                } else {
+                    ctx.fillStyle = "#8888aa";
+                    ctx.font = "bold 16px sans-serif";
+                    ctx.fillText("PRESS SPACEBAR TO SERVE THE VECTOR", canvas.width / 2, canvas.height / 2);
+                }
+            }
+
+            requestAnimationFrame(update);
+        }
+
+        function checkMatchState() {
+            if (pScore >= 7) {
+                gameOver = true;
+                winnerText = "YOU WIN";
+            } else if (cScore >= 7) {
+                gameOver = true;
+                winnerText = "SYSTEM WINS";
+            }
+        }
+
+        function resetMatch() {
+            pScore = 0;
+            cScore = 0;
+            pScoreEl.innerText = "0";
+            cScoreEl.innerText = "0";
+            gameOver = false;
+            winnerText = "";
+            resetBall(Math.random() > 0.5);
+        }
+
+        update();
+    </script>
+</body>
+</html>
