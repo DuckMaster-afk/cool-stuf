@@ -31,6 +31,7 @@
             width: 400px;
             text-align: center;
             box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
+            position: relative;
         }
         h2 { color: #9d4edd; margin-bottom: 20px; }
         .btn {
@@ -47,6 +48,23 @@
             transition: all 0.2s ease;
         }
         .btn:hover { background-color: #b066ff; box-shadow: 0 0 15px #9d4edd; }
+        .back-btn {
+            display: inline-block;
+            color: #9d4edd;
+            text-decoration: none;
+            font-weight: 500;
+            border: 1px solid #9d4edd;
+            padding: 6px 14px;
+            border-radius: 20px;
+            box-shadow: 0 0 8px rgba(157, 78, 221, 0.2);
+            transition: all 0.2s ease;
+            margin-bottom: 20px;
+        }
+        .back-btn:hover {
+            background-color: #9d4edd;
+            color: #040406;
+            box-shadow: 0 0 15px #9d4edd;
+        }
         input {
             width: 100%;
             padding: 10px;
@@ -59,7 +77,7 @@
             margin-bottom: 10px;
         }
         #status-msg { color: #8888aa; font-size: 0.9rem; margin-top: 15px; }
-        #game-container { display: none; position: relative; }
+        #game-container { display: none; position: relative; text-align: center; }
         canvas {
             background-color: #09090e;
             border: 1px solid #1a1a26;
@@ -72,11 +90,39 @@
             color: #666;
             text-align: center;
         }
+        /* Game Over Overlay Style UI */
+        #game-over-overlay {
+            display: none;
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(4, 4, 6, 0.9);
+            border-radius: 12px;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        #win-title {
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        #rematch-status {
+            color: #8888aa;
+            font-size: 0.9rem;
+            margin-bottom: 20px;
+        }
+        .action-btns {
+            display: flex;
+            gap: 15px;
+            width: 320px;
+        }
     </style>
 </head>
 <body>
 
     <div id="lobby">
+        <a href="../index.html" class="back-btn">← Leave Zone</a>
         <h2>⚔️ Neon Tanks Online</h2>
         <button class="btn" id="btn-create">Create a Room</button>
         <div style="margin: 15px 0; color: #555;">— OR —</div>
@@ -87,6 +133,16 @@
 
     <div id="game-container">
         <canvas id="gameCanvas" width="700" height="480"></canvas>
+        
+        <div id="game-over-overlay">
+            <div id="win-title">MATCH OVER</div>
+            <div id="rematch-status">Waiting for players...</div>
+            <div class="action-btns">
+                <button class="btn" id="btn-restart" style="background-color: #38b000;">Restart</button>
+                <button class="btn" id="btn-leave" style="background-color: #ef4444;">Leave Room</button>
+            </div>
+        </div>
+
         <div class="controls-guide">
             Use <b>WASD</b> or <b>ARROW KEYS</b> to Move | Press <b>SPACEBAR</b> to Fire
         </div>
@@ -95,6 +151,9 @@
     <script>
         const lobby = document.getElementById("lobby");
         const gameContainer = document.getElementById("game-container");
+        const gameOverOverlay = document.getElementById("game-over-overlay");
+        const winTitle = document.getElementById("win-title");
+        const rematchStatus = document.getElementById("rematch-status");
         const statusMsg = document.getElementById("status-msg");
         const codeInput = document.getElementById("room-code-input");
         const canvas = document.getElementById("gameCanvas");
@@ -105,6 +164,11 @@
         let isHost = false;
         let role = ""; // "host" or "guest"
         let gameRunning = false;
+        let matchEnded = false;
+
+        // Rematch Sync States
+        let myReadyState = false;
+        let enemyReadyState = false;
 
         // Entities
         let myTank = { x: 0, y: 0, angle: 0, color: "", radius: 14 };
@@ -113,19 +177,16 @@
         let particles = [];
         let keys = {};
 
-        // Generate a simple 5-letter room code
         function makeCode() {
             return Math.random().toString(36).substring(2, 7).toUpperCase();
         }
 
-        // Initialize PeerJS Connection
         peer = new Peer(makeCode());
 
         peer.on('open', (id) => {
             statusMsg.innerText = "Ready to create or join a room.";
         });
 
-        // HOST SIDE: Listening for someone to join
         document.getElementById("btn-create").addEventListener("click", () => {
             isHost = true;
             role = "host";
@@ -137,7 +198,6 @@
             });
         });
 
-        // GUEST SIDE: Joining an existing code
         document.getElementById("btn-join").addEventListener("click", () => {
             const targetCode = codeInput.value.trim().toUpperCase();
             if (!targetCode) return alert("Please enter a room code first.");
@@ -150,6 +210,21 @@
             setupNetworkCallbacks();
         });
 
+        // Rematch Engine Trigger Handlers
+        document.getElementById("btn-restart").addEventListener("click", () => {
+            myReadyState = true;
+            document.getElementById("btn-restart").disabled = true;
+            document.getElementById("btn-restart").style.opacity = "0.5";
+            
+            conn.send({ type: "rematch-request", ready: true });
+            checkRematchStatus();
+        });
+
+        document.getElementById("btn-leave").addEventListener("click", () => {
+            if(conn) conn.close();
+            location.reload();
+        });
+
         function setupNetworkCallbacks() {
             conn.on('open', () => {
                 lobby.style.display = "none";
@@ -158,7 +233,6 @@
             });
 
             conn.on('data', (data) => {
-                // Receive positions and synchronization vectors from opponent
                 if (data.type === "update") {
                     enemyTank.x = data.x;
                     enemyTank.y = data.y;
@@ -168,15 +242,33 @@
                     bullets.push(data.bullet);
                 }
                 if (data.type === "destroyed") {
-                    gameRunning = false;
-                    alert(data.winner === role ? "VICTORY!" : "DEFEATED!");
-                    location.reload();
+                    triggerGameOver(data.winner === role);
                 }
+                if (data.type === "rematch-request") {
+                    enemyReadyState = data.ready;
+                    checkRematchStatus();
+                }
+            });
+
+            conn.on('close', () => {
+                alert("Opponent left the room.");
+                location.reload();
             });
         }
 
         function startGame() {
-            // Set up starting coordinates based on role assignment
+            // Reset state machine parameters
+            matchEnded = false;
+            myReadyState = false;
+            enemyReadyState = false;
+            bullets = [];
+            particles = [];
+            
+            // Re-enable UI components
+            document.getElementById("btn-restart").disabled = false;
+            document.getElementById("btn-restart").style.opacity = "1";
+            gameOverOverlay.style.display = "none";
+
             if (role === "host") {
                 myTank = { x: 60, y: canvas.height / 2, angle: 0, speed: 2.2, turnSpeed: 0.05, radius: 14, color: "#00adb5" };
                 enemyTank = { x: canvas.width - 60, y: canvas.height / 2, angle: Math.PI, color: "#ff2e93", radius: 14 };
@@ -185,83 +277,103 @@
                 enemyTank = { x: 60, y: canvas.height / 2, angle: 0, color: "#00adb5", radius: 14 };
             }
             
-            gameRunning = true;
-            window.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; });
-            window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+            if(!gameRunning) {
+                gameRunning = true;
+                window.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; });
+                window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+                update();
+            } else {
+                gameRunning = true;
+            }
+        }
+
+        function triggerGameOver(isWinner) {
+            matchEnded = true;
+            gameRunning = false;
             
-            update();
+            winTitle.innerText = isWinner ? "VICTORY" : "DEFEATED";
+            winTitle.style.color = isWinner ? "#00adb5" : "#ff2e93";
+            rematchStatus.innerText = "Waiting for players...";
+            gameOverOverlay.style.display = "flex";
+        }
+
+        function checkRematchStatus() {
+            if (myReadyState && enemyReadyState) {
+                startGame();
+            } else if (myReadyState) {
+                rematchStatus.innerText = "Waiting for your opponent to click restart...";
+            } else if (enemyReadyState) {
+                rematchStatus.innerText = "Opponent is ready! Click restart to fight.";
+            }
         }
 
         let lastShot = 0;
         function update() {
-            if (!gameRunning) return;
+            if (matchEnded) return;
 
             ctx.fillStyle = "#09090e";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            // --- LOCAL CONTROLS & PHYSICS ---
-            if (keys['w'] || keys['arrowup']) {
-                myTank.x += Math.cos(myTank.angle) * myTank.speed;
-                myTank.y += Math.sin(myTank.angle) * myTank.speed;
-            }
-            if (keys['s'] || keys['arrowdown']) {
-                myTank.x -= Math.cos(myTank.angle) * myTank.speed;
-                myTank.y -= Math.sin(myTank.angle) * myTank.speed;
-            }
-            if (keys['a'] || keys['arrowleft']) myTank.angle -= myTank.turnSpeed;
-            if (keys['d'] || keys['arrowright']) myTank.angle += myTank.turnSpeed;
+            if (gameRunning) {
+                // --- MOVEMENTS ---
+                if (keys['w'] || keys['arrowup']) {
+                    myTank.x += Math.cos(myTank.angle) * myTank.speed;
+                    myTank.y += Math.sin(myTank.angle) * myTank.speed;
+                }
+                if (keys['s'] || keys['arrowdown']) {
+                    myTank.x -= Math.cos(myTank.angle) * myTank.speed;
+                    myTank.y -= Math.sin(myTank.angle) * myTank.speed;
+                }
+                if (keys['a'] || keys['arrowleft']) myTank.angle -= myTank.turnSpeed;
+                if (keys['d'] || keys['arrowright']) myTank.angle += myTank.turnSpeed;
 
-            // Boundaries protection
-            if (myTank.x < myTank.radius) myTank.x = myTank.radius;
-            if (myTank.x > canvas.width - myTank.radius) myTank.x = canvas.width - myTank.radius;
-            if (myTank.y < myTank.radius) myTank.y = myTank.radius;
-            if (myTank.y > canvas.height - myTank.radius) myTank.y = canvas.height - myTank.radius;
+                if (myTank.x < myTank.radius) myTank.x = myTank.radius;
+                if (myTank.x > canvas.width - myTank.radius) myTank.x = canvas.width - myTank.radius;
+                if (myTank.y < myTank.radius) myTank.y = myTank.radius;
+                if (myTank.y > canvas.height - myTank.radius) myTank.y = canvas.height - myTank.radius;
 
-            // Fire input handling
-            if (keys[' '] && Date.now() - lastShot > 600) {
-                lastShot = Date.now();
-                let b = {
-                    x: myTank.x + Math.cos(myTank.angle) * 18,
-                    y: myTank.y + Math.sin(myTank.angle) * 18,
-                    vx: Math.cos(myTank.angle) * 5,
-                    vy: Math.sin(myTank.angle) * 5,
-                    radius: 3,
-                    color: myTank.color,
-                    bounces: 0
-                };
-                bullets.push(b);
-                // Send bullet event data directly across the network pipeline
-                conn.send({ type: "fire", bullet: b });
-            }
-
-            // Send local movement data state to opponent peer link
-            conn.send({ type: "update", x: myTank.x, y: myTank.y, angle: myTank.angle });
-
-            // --- PROCESS BULLETS RUNTIME ---
-            for (let i = bullets.length - 1; i >= 0; i--) {
-                let b = bullets[i];
-                b.x += b.vx;
-                b.y += b.vy;
-
-                if (b.x - b.radius < 0 || b.x + b.radius > canvas.width) { b.vx = -b.vx; b.bounces++; }
-                if (b.y - b.radius < 0 || b.y + b.radius > canvas.height) { b.vy = -b.vy; b.bounces++; }
-
-                if (b.bounces > 2) {
-                    bullets.splice(i, 1);
-                    continue;
+                // --- WEAPONS SHOTS ---
+                if (keys[' '] && Date.now() - lastShot > 600) {
+                    lastShot = Date.now();
+                    let b = {
+                        x: myTank.x + Math.cos(myTank.angle) * 18,
+                        y: myTank.y + Math.sin(myTank.angle) * 18,
+                        vx: Math.cos(myTank.angle) * 5,
+                        vy: Math.sin(myTank.angle) * 5,
+                        radius: 3,
+                        color: myTank.color,
+                        bounces: 0
+                    };
+                    bullets.push(b);
+                    conn.send({ type: "fire", bullet: b });
                 }
 
-                // Only check if you got hit on your local window (prevents network desync fighting)
-                if (Math.hypot(b.x - myTank.x, b.y - myTank.y) < myTank.radius) {
-                    conn.send({ type: "destroyed", winner: role === "host" ? "guest" : "host" });
-                    gameRunning = false;
-                    alert("DEFEATED!");
-                    location.reload();
-                    return;
+                conn.send({ type: "update", x: myTank.x, y: myTank.y, angle: myTank.angle });
+
+                // --- TRAJECTORY PHYSICS ENGINE ---
+                for (let i = bullets.length - 1; i >= 0; i--) {
+                    let b = bullets[i];
+                    b.x += b.vx;
+                    b.y += b.vy;
+
+                    if (b.x - b.radius < 0 || b.x + b.radius > canvas.width) { b.vx = -b.vx; b.bounces++; }
+                    if (b.y - b.radius < 0 || b.y + b.radius > canvas.height) { b.vy = -b.vy; b.bounces++; }
+
+                    if (b.bounces > 2) {
+                        bullets.splice(i, 1);
+                        continue;
+                    }
+
+                    // Self-Hit computation
+                    if (Math.hypot(b.x - myTank.x, b.y - myTank.y) < myTank.radius) {
+                        conn.send({ type: "destroyed", winner: role === "host" ? "guest" : "host" });
+                        triggerGameOver(false);
+                        return;
+                    }
                 }
             }
 
-            // --- RENDER VEHICLES ---
+            // --- CANVAS RENDERS DRAW ---
             [myTank, enemyTank].forEach(p => {
                 ctx.save();
                 ctx.translate(p.x, p.y);
@@ -275,7 +387,6 @@
                 ctx.restore();
             });
 
-            // --- RENDER BULLETS ---
             bullets.forEach(b => {
                 ctx.fillStyle = b.color;
                 ctx.beginPath(); ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2); ctx.fill();
