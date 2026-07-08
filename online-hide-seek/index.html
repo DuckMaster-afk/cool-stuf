@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Hide & Seek Online</title>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: '-apple-system', BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #040406; color: #fafafa;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            height: 100vh; overflow: hidden; padding: 20px;
+        }
+        #lobby {
+            background-color: #09090e; border: 1px solid #1a1a26; border-radius: 12px;
+            padding: 30px; width: 420px; text-align: center; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7);
+        }
+        h2 { color: #9d4edd; margin-bottom: 20px; }
+        .btn {
+            background-color: #9d4edd; color: #fff; border: none; padding: 10px 20px;
+            font-size: 1rem; border-radius: 20px; cursor: pointer; font-weight: bold;
+            margin: 10px 0; width: 100%; transition: all 0.2s ease;
+        }
+        .btn:hover { background-color: #b066ff; box-shadow: 0 0 15px #9d4edd; }
+        .btn:disabled { background-color: #333; cursor: not-allowed; box-shadow: none; }
+        .back-btn {
+            display: inline-block; color: #9d4edd; text-decoration: none; font-weight: 500;
+            border: 1px solid #9d4edd; padding: 6px 14px; border-radius: 20px; margin-bottom: 20px;
+        }
+        input {
+            width: 100%; padding: 10px; border-radius: 20px; border: 1px solid #2d2d44;
+            background-color: #161626; color: #fff; text-align: center; font-size: 1rem; margin-bottom: 10px;
+        }
+        #player-list {
+            margin: 15px 0; background: #11111b; border-radius: 8px; padding: 10px;
+            text-align: left; font-size: 0.9rem; max-height: 120px; overflow-y: auto;
+        }
+        #status-msg { color: #8888aa; font-size: 0.9rem; margin-top: 10px; }
+        #game-container { display: none; position: relative; text-align: center; }
+        canvas { background-color: #0c0c14; border: 1px solid #1a1a26; border-radius: 12px; }
+        #ui-bar {
+            width: 100%; display: flex; justify-content: space-between;
+            margin-bottom: 10px; font-size: 1.2rem; font-weight: bold;
+        }
+        #game-over-overlay {
+            display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(4, 4, 6, 0.95); border-radius: 12px;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="lobby">
+        <a href="../index.html" class="back-btn">← Leave Zone</a>
+        <h2>👥 Hide & Seek Online</h2>
+        
+        <input type="text" id="username-input" placeholder="Enter Username (Optional)">
+        <button class="btn" id="btn-create">Create Room (Host)</button>
+        <div style="margin: 10px 0; color: #444;">— OR —</div>
+        <input type="text" id="room-code-input" placeholder="Enter Room Code">
+        <button class="btn" id="btn-join" style="background-color: #00adb5;">Join Room</button>
+        
+        <div id="player-list-section" style="display:none; margin-top:15px;">
+            <div style="font-weight:bold; color:#9d4edd;">Players connected (<span id="count">0</span>/8):</div>
+            <div id="player-list"></div>
+            <button class="btn" id="btn-start" style="background-color:#38b000; display:none;" disabled>Start Match (Need 2+ Players)</button>
+        </div>
+        <div id="status-msg">Connecting to matchmaking system...</div>
+    </div>
+
+    <div id="game-container">
+        <div id="ui-bar">
+            <div id="role-display" style="color: #00adb5;">ROLE: WAITING</div>
+            <div id="timer-display" style="color: #ff8a00;">TIME: 03:00</div>
+        </div>
+        <canvas id="gameCanvas" width="800" height="500"></canvas>
+        
+        <div id="game-over-overlay">
+            <h1 id="win-title" style="font-size:3rem; margin-bottom:20px;">HIDERS WIN</h1>
+            <button class="btn" onclick="location.reload()" style="width:200px; background-color:#ef4444;">Return to Lobby</button>
+        </div>
+    </div>
+
+    <script>
+        const adjectives = ["Neon", "Cyber", "Shadow", "Quantum", "Retro", "Ghost", "Alpha", "Turbo"];
+        const nouns = ["Tank", "Racer", "Runner", "Phantom", "Ninja", "Glitch", "Cyborg", "Vortex"];
+        
+        function getRandomName() {
+            return adjectives[Math.floor(Math.random()*adjectives.length)] + nouns[Math.floor(Math.random()*nouns.length)];
+        }
+
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const lobby = document.getElementById("lobby");
+        const gameContainer = document.getElementById("game-container");
+        const playerListDiv = document.getElementById("player-list");
+        const statusMsg = document.getElementById("status-msg");
+
+        let peer, conn, role = ""; 
+        let myId = "";
+        let myUsername = "";
+        let connections = []; // Host only track list
+        let players = {};     // Synchronized list of players
+        let gameRunning = false;
+        let keys = {};
+        let timeRemaining = 180; // 3 minutes
+        let timerInterval;
+
+        peer = new Peer(Math.random().toString(36).substring(2, 7).toUpperCase());
+        peer.on('open', id => { myId = id; statusMsg.innerText = "Matchmaker connected."; });
+
+        // HOST INITIALIZATION
+        document.getElementById("btn-create").addEventListener("click", () => {
+            myUsername = document.getElementById("username-input").value.trim() || getRandomName();
+            role = "host";
+            document.getElementById("player-list-section").style.display = "block";
+            document.getElementById("btn-start").style.display = "block";
+            statusMsg.innerHTML = `Room Code: <b style='color:#9d4edd; font-size:1.3rem;'>${myId}</b>`;
+            
+            players[myId] = { id: myId, name: myUsername, x: 100, y: 250, angle: 0, seeker: false, caught: false, inConeTime: 0 };
+            updateLobbyUI();
+
+            peer.on('connection', c => {
+                if (Object.keys(players).length >= 8 || gameRunning) {
+                    setTimeout(() => c.close(), 500); return;
+                }
+                c.on('open', () => {
+                    connections.push(c);
+                    c.on('data', data => handleNetworkData(data, c));
+                });
+                c.on('close', () => {
+                    connections = connections.filter(conn => conn !== c);
+                    let leftId = Object.keys(players).find(k => players[k].peerConn === c);
+                    if(leftId) { delete players[leftId]; broadcast({type: "sync", players, timeRemaining}); updateLobbyUI(); }
+                });
+            });
+        });
+
+        // GUEST INITIALIZATION
+        document.getElementById("btn-join").addEventListener("click", () => {
+            let code = document.getElementById("room-code-input").value.trim().toUpperCase();
+            if(!code) return alert("Enter code.");
+            myUsername = document.getElementById("username-input").value.trim() || getRandomName();
+            role = "guest";
+            statusMsg.innerText = "Joining...";
+            
+            conn = peer.connect(code);
+            conn.on('open', () => {
+                conn.send({ type: "join", username: myUsername, id: myId });
+                document.getElementById("player-list-section").style.display = "block";
+                statusMsg.innerText = "Connected! Waiting for host...";
+            });
+            conn.on('data', data => handleNetworkData(data, conn));
+            conn.on('close', () => { alert("Host disconnected."); location.reload(); });
+        });
+
+        // HOST CLICKS START
+        document.getElementById("btn-start").addEventListener("click", () => {
+            let keysArray = Object.keys(players);
+            let randomSeeker = keysArray[Math.floor(Math.random() * keysArray.length)];
+            
+            // Spawn Seeker in center, hiders scattered
+            keysArray.forEach(k => {
+                players[k].seeker = (k === randomSeeker);
+                if (players[k].seeker) {
+                    players[k].x = 400; players[k].y = 250;
+                } else {
+                    players[k].x = 50 + Math.random() * 200 + (Math.random() > 0.5 ? 450 : 0);
+                    players[k].y = 50 + Math.random() * 400;
+                }
+            });
+
+            broadcast({ type: "start", players });
+            beginMatch();
+        });
+
+        function handleNetworkData(data, c) {
+            if (role === "host") {
+                if (data.type === "join") {
+                    players[data.id] = { id: data.id, name: data.username, x: 0, y: 0, angle: 0, seeker: false, caught: false, inConeTime: 0, peerConn: c };
+                    broadcast({ type: "sync", players });
+                    updateLobbyUI();
+                }
+                if (data.type === "input") {
+                    if(players[data.id] && !players[data.id].caught) {
+                        players[data.id].x = data.x; players[data.id].y = data.y; players[data.id].angle = data.angle;
+                    }
+                }
+            } else {
+                if (data.type === "sync") { players = data.players; updateLobbyUI(); }
+                if (data.type === "start") { players = data.players; beginMatch(); }
+                if (data.type === "state-update") { 
+                    Object.keys(data.players).forEach(k => {
+                        if(k !== myId) { players[k].x = data.players[k].x; players[k].y = data.players[k].y; players[k].angle = data.players[k].angle; }
+                        players[k].caught = data.players[k].caught;
+                    });
+                    timeRemaining = data.timeRemaining;
+                    updateUIBar();
+                }
+                if (data.type === "end") { triggerEndGame(data.winner); }
+            }
+        }
+
+        function broadcast(msg) { connections.forEach(c => c.send(msg)); }
+
+        function updateLobbyUI() {
+            let count = Object.keys(players).length;
+            document.getElementById("count").innerText = count;
+            playerListDiv.innerHTML = Object.keys(players).map(k => `<div>• ${players[k].name} ${k === myId ? '(You)' : ''}</div>`).join('');
+            if (role === "host") document.getElementById("btn-start").disabled = (count < 2);
+        }
+
+        function beginMatch() {
+            lobby.style.display = "none";
+            gameContainer.style.display = "block";
+            gameRunning = true;
+            
+            window.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; if([" ", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(e.key)) e.preventDefault();});
+            window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+            
+            if (role === "host") {
+                timerInterval = setInterval(() => {
+                    timeRemaining--;
+                    if(timeRemaining <= 0) evaluateWinCondition(true); // Time out = hiders win
+                }, 1000);
+            }
+            updateUIBar();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function updateUIBar() {
+            let me = players[myId];
+            document.getElementById("role-display").innerText = me.seeker ? "ROLE: SEEKER 🔎" : (me.caught ? "ROLE: CAUGHT 💀" : "ROLE: HIDER 🏃‍♂️");
+            document.getElementById("role-display").style.color = me.seeker ? "#ff2e93" : "#00adb5";
+            let mins = Math.floor(timeRemaining / 60).toString().padStart(2, '0');
+            let secs = (timeRemaining % 60).toString().padStart(2, '0');
+            document.getElementById("timer-display").innerText = `TIME: ${mins}:${secs}`;
+        }
+
+        function gameLoop() {
+            if (!gameRunning) return;
+            processLocalMovement();
+            
+            if (role === "host") {
+                processRulesEngine();
+                broadcast({ type: "state-update", players, timeRemaining });
+            } else {
+                conn.send({ type: "input", id: myId, x: players[myId].x, y: players[myId].y, angle: players[myId].angle });
+            }
+
+            renderGraphics();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function processLocalMovement() {
+            let me = players[myId];
+            if (me.caught) return;
+
+            let speed = me.seeker ? 2.6 : 3.0; // Seeker moves slightly slower to balance fog advantage
+            let dx = 0, dy = 0;
+
+            if (keys['w'] || keys['arrowup']) dy = -1;
+            if (keys['s'] || keys['arrowdown']) dy = 1;
+            if (keys['a'] || keys['arrowleft']) dx = -1;
+            if (keys['d'] || keys['arrowright']) dx = 1;
+
+            if (dx !== 0 || dy !== 0) {
+                me.angle = Math.atan2(dy, dx);
+                me.x += dx * speed; me.y += dy * speed;
+                
+                // Border Collisions
+                if (me.x < 15) me.x = 15; if (me.x > canvas.width - 15) me.x = canvas.width - 15;
+                if (me.y < 15) me.y = 15; if (me.y > canvas.height - 15) me.y = canvas.height - 15;
+            }
+        }
+
+        function processRulesEngine() {
+            let seeker = Object.values(players).find(p => p.seeker);
+            if (!seeker) return;
+
+            let hidersAlive = 0;
+            let coneAngle = 0.65; // Vision arc window
+            let coneDist = 180;
+
+            Object.keys(players).forEach(k => {
+                let p = players[k];
+                if (p.seeker) return;
+                if (p.caught) return;
+
+                hidersAlive++;
+                let hdx = p.x - seeker.x;
+                let hdy = p.y - seeker.y;
+                let dist = Math.hypot(hdx, hdy);
+                
+                let inCone = false;
+                if (dist < coneDist) {
+                    let angleToHider = Math.atan2(hdy, hdx);
+                    let diff = Math.atan2(Math.sin(angleToHider - seeker.angle), Math.cos(angleToHider - seeker.angle));
+                    if (Math.abs(diff) < coneAngle) inCone = true;
+                }
+
+                if (inCone) {
+                    p.inConeTime += 1/60; // Adds frame delta step (~16.6ms)
+                    if (p.inConeTime >= 1.5) p.caught = true;
+                } else {
+                    p.inConeTime = Math.max(0, p.inConeTime - 1/60);
+                }
+            });
+
+            if (hidersAlive === 0) evaluateWinCondition(false); // Seeker caught everyone
+        }
+
+        function evaluateWinCondition(timeRanOut) {
+            clearInterval(timerInterval);
+            let winner = timeRanOut ? "HIDERS" : "SEEKER";
+            broadcast({ type: "end", winner });
+            triggerEndGame(winner);
+        }
+
+        function triggerEndGame(winner) {
+            gameRunning = false;
+            document.getElementById("win-title").innerText = `${winner} WIN!`;
+            document.getElementById("win-title").style.color = winner === "HIDERS" ? "#00adb5" : "#ff2e93";
+            document.getElementById("game-over-overlay").style.display = "flex";
+        }
+
+        function renderGraphics() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            let me = players[myId];
+
+            // Render Flashlight / Vision Masking Frame Layer
+            if (me.seeker) {
+                // 1. Draw solid complete blackout shadow canopy profile mask over canvas
+                ctx.fillStyle = "#000000";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // 2. Cut out vision cone segment using composite clip properties masking
+                ctx.save();
+                ctx.beginPath();
+                ctx.moveTo(me.x, me.y);
+                ctx.arc(me.x, me.y, 180, me.angle - 0.65, me.angle + 0.65);
+                ctx.closePath();
+                ctx.clip();
+
+                // Draw Ground under light beam window area cutout path
+                ctx.fillStyle = "#11111e";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                drawGameEntities(true);
+                ctx.restore();
+            } else {
+                // Hiders see everything natively
+                ctx.fillStyle = me.inConeTime > 0 ? `rgba(180, 20, 20, ${0.2 + (me.inConeTime/1.5)*0.5})` : "#0c0c14";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                drawGameEntities(false);
+            }
+        }
+
+        function drawGameEntities(isSeekerVision) {
+            Object.values(players).forEach(p => {
+                if (p.caught && isSeekerVision) return; // Don't draw caught souls to seeker
+
+                ctx.save();
+                ctx.translate(p.x, p.y);
+                ctx.rotate(p.angle);
+
+                // Setup colors neon lighting indicators Profiles
+                let color = p.seeker ? "#ff2e93" : (p.caught ? "#444455" : "#00adb5");
+                ctx.fillStyle = color;
+                ctx.strokeStyle = color;
+                ctx.shadowBlur = p.caught ? 0 : 10;
+                ctx.shadowColor = color;
+
+                // Shape
+                ctx.beginPath();
+                ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Direction line indicator marker pointers
+                if(!p.caught) {
+                    ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(12,0); ctx.stroke();
+                }
+
+                ctx.restore();
+                ctx.shadowBlur = 0;
+
+                // Username Tag Renders Overlay Text maps
+                ctx.fillStyle = p.seeker ? "#ff2e93" : "#ffffff";
+                ctx.font = "10px sans-serif";
+                ctx.textAlign = "center";
+                ctx.fillText(p.name, p.x, p.y - 18);
+            });
+        }
+    </script>
+</body>
+</html>
