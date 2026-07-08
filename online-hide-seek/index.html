@@ -104,40 +104,41 @@
         let peer, conn, role = ""; 
         let myId = "";
         let myUsername = "";
-        let connections = []; // Host tracker pipeline
+        let connections = []; 
         let players = {};     
         let gameRunning = false;
         let keys = {};
         let timeRemaining = 180; 
+        let releaseCountdown = 5; // 5-second grace period headstart
         let timerInterval;
 
-        // Auto-initialize Peer connection immediately on page load
-        peer = new Peer(Math.random().toString(36).substring(2, 7).toUpperCase());
-        peer.on('open', id => { 
-            myId = id; 
-            statusMsg.innerText = "Matchmaker ready."; 
-        });
+        // Permanent Map Architecture Layout Obstacles (X, Y, Width, Height)
+        const obstacles = [
+            { x: 180, y: 100, w: 40, h: 120 },
+            { x: 580, y: 100, w: 40, h: 120 },
+            { x: 340, y: 220, w: 120, h: 40 },
+            { x: 180, y: 300, w: 40, h: 120 },
+            { x: 580, y: 300, w: 40, h: 120 },
+            { x: 60, y: 220, w: 80, h: 40 },
+            { x: 660, y: 220, w: 80, h: 40 }
+        ];
 
-        // HOST ACTION
+        peer = new Peer(Math.random().toString(36).substring(2, 7).toUpperCase());
+        peer.on('open', id => { myId = id; statusMsg.innerText = "Matchmaker ready."; });
+
         document.getElementById("btn-create").addEventListener("click", () => {
             if (!myId) return alert("Still waiting for network initialization.");
             myUsername = document.getElementById("username-input").value.trim() || getRandomName();
             role = "host";
-            
             document.getElementById("player-list-section").style.display = "block";
             btnStart.style.display = "block";
-            statusMsg.innerHTML = `Room Code: <b style='color:#9d4edd; font-size:1.3rem; letter-spacing:1px;'>${myId}</b>`;
+            statusMsg.innerHTML = `Room Code: <b style='color:#9d4edd; font-size:1.3rem;'>${myId}</b>`;
             
-            // Register host inside data layout maps
             players[myId] = { id: myId, name: myUsername, x: 100, y: 250, angle: 0, seeker: false, caught: false, inConeTime: 0, radius: 14 };
             updateLobbyUI();
 
-            // Open pipeline receiver channel configurations
             peer.on('connection', c => {
-                if (Object.keys(players).length >= 8 || gameRunning) {
-                    setTimeout(() => c.close(), 500); 
-                    return;
-                }
+                if (Object.keys(players).length >= 8 || gameRunning) { setTimeout(() => c.close(), 500); return; }
                 c.on('open', () => {
                     connections.push(c);
                     c.on('data', data => handleNetworkData(data, c));
@@ -145,20 +146,13 @@
                 c.on('close', () => {
                     connections = connections.filter(conn => conn !== c);
                     let leftId = Object.keys(players).find(k => players[k].peerId === c.peer);
-                    if(leftId) { 
-                        delete players[leftId]; 
-                        broadcast({type: "sync", players}); 
-                        updateLobbyUI(); 
-                    }
+                    if(leftId) { delete players[leftId]; broadcast({type: "sync", players}); updateLobbyUI(); }
                 });
             });
-            
-            // Disable configuration inputs to lock setup choice mechanics
             document.getElementById("btn-create").disabled = true;
             document.getElementById("btn-join").disabled = true;
         });
 
-        // GUEST ACTION
         document.getElementById("btn-join").addEventListener("click", () => {
             let code = document.getElementById("room-code-input").value.trim().toUpperCase();
             if(!code) return alert("Please enter a room code.");
@@ -170,16 +164,13 @@
             conn.on('open', () => {
                 conn.send({ type: "join", username: myUsername, id: myId });
                 document.getElementById("player-list-section").style.display = "block";
-                statusMsg.innerText = "Joined room! Awaiting host match start...";
             });
             conn.on('data', data => handleNetworkData(data, conn));
-            conn.on('close', () => { alert("Host closed the session connection."); location.reload(); });
-
+            conn.on('close', () => { alert("Host closed session."); location.reload(); });
             document.getElementById("btn-create").disabled = true;
             document.getElementById("btn-join").disabled = true;
         });
 
-        // HOST TRIGGERS GAME START
         btnStart.addEventListener("click", () => {
             let keysArray = Object.keys(players);
             let randomSeeker = keysArray[Math.floor(Math.random() * keysArray.length)];
@@ -188,13 +179,18 @@
                 players[k].seeker = (k === randomSeeker);
                 players[k].caught = false;
                 players[k].inConeTime = 0;
-                players[k].radius = 14; // Force set radius bounds values tracking explicitly
+                players[k].radius = 14;
                 if (players[k].seeker) {
-                    players[k].x = 400; players[k].y = 250; players[k].angle = 0;
+                    players[k].x = 400; players[k].y = 150; players[k].angle = Math.PI / 2;
                 } else {
                     players[k].x = 70 + Math.random() * 180 + (Math.random() > 0.5 ? 450 : 0);
                     players[k].y = 70 + Math.random() * 360;
                     players[k].angle = Math.random() * Math.PI * 2;
+                    // Prevent spawning stuck inside obstacles clip box
+                    while(checkObstacleCollision(players[k].x, players[k].y, 14)) {
+                        players[k].x = 50 + Math.random() * 700;
+                        players[k].y = 50 + Math.random() * 400;
+                    }
                 }
             });
 
@@ -206,14 +202,12 @@
             if (role === "host") {
                 if (data.type === "join") {
                     players[data.id] = { id: data.id, name: data.username, x: 0, y: 0, angle: 0, seeker: false, caught: false, inConeTime: 0, radius: 14, peerId: c.peer };
-                    broadcast({ type: "sync", players }); // Update all guest lists instantly
+                    broadcast({ type: "sync", players });
                     updateLobbyUI();
                 }
                 if (data.type === "input") {
                     if(players[data.id] && !players[data.id].caught) {
-                        players[data.id].x = data.x; 
-                        players[data.id].y = data.y; 
-                        players[data.id].angle = data.angle;
+                        players[data.id].x = data.x; players[data.id].y = data.y; players[data.id].angle = data.angle;
                     }
                 }
             } else {
@@ -221,15 +215,12 @@
                 if (data.type === "start") { players = data.players; beginMatch(); }
                 if (data.type === "state-update") { 
                     Object.keys(data.players).forEach(k => {
-                        if(k !== myId) { 
-                            players[k].x = data.players[k].x; 
-                            players[k].y = data.players[k].y; 
-                            players[k].angle = data.players[k].angle; 
-                        }
+                        if(k !== myId) { players[k].x = data.players[k].x; players[k].y = data.players[k].y; players[k].angle = data.players[k].angle; }
                         players[k].caught = data.players[k].caught;
                         players[k].inConeTime = data.players[k].inConeTime;
                     });
                     timeRemaining = data.timeRemaining;
+                    releaseCountdown = data.releaseCountdown;
                     updateUIBar();
                 }
                 if (data.type === "end") { triggerEndGame(data.winner); }
@@ -242,26 +233,27 @@
             let count = Object.keys(players).length;
             document.getElementById("count").innerText = count;
             playerListDiv.innerHTML = Object.keys(players).map(k => `<div>• ${players[k].name} ${k === myId ? '<span style="color:#888;">(You)</span>' : ''}</div>`).join('');
-            
-            if (role === "host") {
-                btnStart.disabled = (count < 2);
-                if (count >= 2) btnStart.innerText = "Start Match ⚔️";
-                else btnStart.innerText = "Need 2+ Players to Start";
-            }
+            if (role === "host") btnStart.disabled = (count < 2);
         }
 
         function beginMatch() {
             lobby.style.display = "none";
             gameContainer.style.display = "block";
             gameRunning = true;
+            releaseCountdown = 5;
+            timeRemaining = 180;
             
             window.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; if([" ", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(e.key)) e.preventDefault();});
             window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
             
             if (role === "host") {
                 timerInterval = setInterval(() => {
-                    timeRemaining--;
-                    if(timeRemaining <= 0) evaluateWinCondition(true);
+                    if (releaseCountdown > 0) {
+                        releaseCountdown--;
+                    } else {
+                        timeRemaining--;
+                        if(timeRemaining <= 0) evaluateWinCondition(true);
+                    }
                 }, 1000);
             }
             updateUIBar();
@@ -271,11 +263,48 @@
         function updateUIBar() {
             let me = players[myId];
             if(!me) return;
+            if (releaseCountdown > 0) {
+                document.getElementById("timer-display").innerText = `SEEKER RELEASE IN: ${releaseCountdown}s`;
+                document.getElementById("timer-display").style.color = "#ff2e93";
+            } else {
+                let mins = Math.floor(timeRemaining / 60).toString().padStart(2, '0');
+                let secs = (timeRemaining % 60).toString().padStart(2, '0');
+                document.getElementById("timer-display").innerText = `TIME: ${mins}:${secs}`;
+                document.getElementById("timer-display").style.color = "#ff8a00";
+            }
             document.getElementById("role-display").innerText = me.seeker ? "ROLE: SEEKER 🔎" : (me.caught ? "ROLE: CAUGHT 💀" : "ROLE: HIDER 🏃‍♂️");
             document.getElementById("role-display").style.color = me.seeker ? "#ff2e93" : "#00adb5";
-            let mins = Math.floor(timeRemaining / 60).toString().padStart(2, '0');
-            let secs = (timeRemaining % 60).toString().padStart(2, '0');
-            document.getElementById("timer-display").innerText = `TIME: ${mins}:${secs}`;
+        }
+
+        function checkObstacleCollision(x, y, r) {
+            for (let obs of obstacles) {
+                let closestX = Math.max(obs.x, Math.min(x, obs.x + obs.w));
+                let closestY = Math.max(obs.y, Math.min(y, obs.y + obs.h));
+                if (Math.hypot(x - closestX, y - closestY) < r) return true;
+            }
+            return false;
+        }
+
+        // Raycasting check to see if vision is blocked by scenery walls
+        function isLineOfSightBlocked(x1, y1, x2, y2) {
+            for (let obs of obstacles) {
+                if (lineIntersectsRect(x1, y1, x2, y2, obs)) return true;
+            }
+            return false;
+        }
+
+        function lineIntersectsRect(x1, y1, x2, y2, rect) {
+            let rx1 = rect.x, ry1 = rect.y, rx2 = rect.x + rect.w, ry2 = rect.y + rect.h;
+            return lineIntersectsLine(x1,y1,x2,y2, rx1,ry1,rx2,ry1) ||
+                   lineIntersectsLine(x1,y1,x2,y2, rx2,ry1,rx2,ry2) ||
+                   lineIntersectsLine(x1,y1,x2,y2, rx1,ry2,rx2,ry2) ||
+                   lineIntersectsLine(x1,y1,x2,y2, rx1,ry1,rx1,ry2);
+        }
+
+        function lineIntersectsLine(x1, y1, x2, y2, x3, y3, x4, y4) {
+            let uA = ((x4-x3)*(y1-y3) - (y4-y3)*(x1-x3)) / ((y4-y3)*(x2-x1) - (x4-x3)*(y2-y1));
+            let uB = ((x2-x1)*(y1-y3) - (y2-y1)*(x1-x3)) / ((y4-y3)*(x2-x1) - (x4-x3)*(y2-y1));
+            return (uA >= 0 && uA <= 1 && uB >= 0 && uB <= 1);
         }
 
         function gameLoop() {
@@ -284,11 +313,9 @@
             
             if (role === "host") {
                 processRulesEngine();
-                broadcast({ type: "state-update", players, timeRemaining });
+                broadcast({ type: "state-update", players, timeRemaining, releaseCountdown });
             } else {
-                if (players[myId]) {
-                    conn.send({ type: "input", id: myId, x: players[myId].x, y: players[myId].y, angle: players[myId].angle });
-                }
+                if (players[myId]) conn.send({ type: "input", id: myId, x: players[myId].x, y: players[myId].y, angle: players[myId].angle });
             }
 
             renderGraphics();
@@ -298,6 +325,7 @@
         function processLocalMovement() {
             let me = players[myId];
             if (!me || me.caught) return;
+            if (me.seeker && releaseCountdown > 0) return; // Seeker frozen during release timer grace period
 
             let speed = me.seeker ? 2.5 : 3.0; 
             let dx = 0, dy = 0;
@@ -309,10 +337,13 @@
 
             if (dx !== 0 || dy !== 0) {
                 me.angle = Math.atan2(dy, dx);
-                me.x += dx * speed; me.y += dy * speed;
+                let oldX = me.x, oldY = me.y;
                 
-                if (me.x < 15) me.x = 15; if (me.x > canvas.width - 15) me.x = canvas.width - 15;
-                if (me.y < 15) me.y = 15; if (me.y > canvas.height - 15) me.y = canvas.height - 15;
+                me.x += dx * speed;
+                if (me.x < 15 || me.x > canvas.width - 15 || checkObstacleCollision(me.x, me.y, 14)) me.x = oldX;
+                
+                me.y += dy * speed;
+                if (me.y < 15 || me.y > canvas.height - 15 || checkObstacleCollision(me.x, me.y, 14)) me.y = oldY;
             }
         }
 
@@ -329,6 +360,8 @@
                 if (p.seeker || p.caught) return;
 
                 hidersAlive++;
+                if (releaseCountdown > 0) return; // Can't detect during countdown headstart
+
                 let hdx = p.x - seeker.x;
                 let hdy = p.y - seeker.y;
                 let dist = Math.hypot(hdx, hdy);
@@ -337,7 +370,10 @@
                 if (dist < coneDist) {
                     let angleToHider = Math.atan2(hdy, hdx);
                     let diff = Math.atan2(Math.sin(angleToHider - seeker.angle), Math.cos(angleToHider - seeker.angle));
-                    if (Math.abs(diff) < coneAngle) inCone = true;
+                    if (Math.abs(diff) < coneAngle) {
+                        // Vision check: Verify obstacle isn't blocking line of sight
+                        if (!isLineOfSightBlocked(seeker.x, seeker.y, p.x, p.y)) inCone = true;
+                    }
                 }
 
                 if (inCone) {
@@ -370,7 +406,8 @@
             let me = players[myId];
             if (!me) return;
 
-            if (me.seeker) {
+            if (me.seeker && releaseCountdown === 0) {
+                // Seeker blind/fog layout processing
                 ctx.fillStyle = "#000000";
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -381,20 +418,59 @@
                 ctx.closePath();
                 ctx.clip();
 
-                ctx.fillStyle = "#11111e";
+                ctx.fillStyle = "#0c0c14";
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                drawObstacles();
                 drawGameEntities(true);
                 ctx.restore();
             } else {
-                ctx.fillStyle = me.inConeTime > 0 ? `rgba(180, 20, 20, ${0.2 + (me.inConeTime / 1.5) * 0.5})` : "#0c0c14";
+                // Hiders and pre-released seeker screen layout rendering
+                ctx.fillStyle = (me.inConeTime > 0 && !me.seeker) ? `rgba(180, 20, 20, ${0.2 + (me.inConeTime / 1.5) * 0.5})` : "#0c0c14";
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                // Draw Seeker's Vision Spotlight Cone for hiders to see dynamically!
+                let seeker = Object.values(players).find(p => p.seeker);
+                if (seeker && releaseCountdown === 0) {
+                    ctx.save();
+                    ctx.fillStyle = "rgba(255, 46, 147, 0.08)";
+                    ctx.strokeStyle = "rgba(255, 46, 147, 0.3)";
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.moveTo(seeker.x, seeker.y);
+                    ctx.arc(seeker.x, seeker.y, 180, seeker.angle - 0.65, seeker.angle + 0.65);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.stroke();
+                    ctx.restore();
+                }
+
+                drawObstacles();
                 drawGameEntities(false);
             }
+        }
+
+        function drawObstacles() {
+            obstacles.forEach(obs => {
+                ctx.strokeStyle = "#4d2ab3";
+                ctx.fillStyle = "#16102b";
+                ctx.lineWidth = 2;
+                ctx.shadowBlur = 8;
+                ctx.shadowColor = "#4d2ab3";
+                ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
+                ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
+            });
+            ctx.shadowBlur = 0;
         }
 
         function drawGameEntities(isSeekerVision) {
             Object.values(players).forEach(p => {
                 if (p.caught && isSeekerVision) return; 
+                // Hide hiding players from seeker if line of sight is completely blocked by wall architecture geometry
+                if (isSeekerVision && !p.seeker) {
+                    let seeker = players[myId];
+                    if (isLineOfSightBlocked(seeker.x, seeker.y, p.x, p.y)) return;
+                }
 
                 ctx.save();
                 ctx.translate(p.x, p.y);
@@ -407,7 +483,7 @@
                 ctx.shadowColor = color;
 
                 ctx.beginPath();
-                ctx.arc(0, 0, 14, 0, Math.PI * 2); // Explicit size backup parameter maps
+                ctx.arc(0, 0, 14, 0, Math.PI * 2);
                 ctx.fill();
 
                 if(!p.caught) {
