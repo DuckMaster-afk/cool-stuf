@@ -24,11 +24,12 @@
             margin: 10px 0; width: 100%; transition: all 0.2s ease;
         }
         .btn:hover { background-color: #b066ff; box-shadow: 0 0 15px #9d4edd; }
-        .btn:disabled { background-color: #333; cursor: not-allowed; box-shadow: none; }
+        .btn:disabled { background-color: #333; cursor: not-allowed; box-shadow: none; color: #777; }
         .back-btn {
             display: inline-block; color: #9d4edd; text-decoration: none; font-weight: 500;
             border: 1px solid #9d4edd; padding: 6px 14px; border-radius: 20px; margin-bottom: 20px;
         }
+        .back-btn:hover { background-color: #9d4edd; color: #040406; }
         input {
             width: 100%; padding: 10px; border-radius: 20px; border: 1px solid #2d2d44;
             background-color: #161626; color: #fff; text-align: center; font-size: 1rem; margin-bottom: 10px;
@@ -68,7 +69,7 @@
             <div id="player-list"></div>
             <button class="btn" id="btn-start" style="background-color:#38b000; display:none;" disabled>Start Match (Need 2+ Players)</button>
         </div>
-        <div id="status-msg">Connecting to matchmaking system...</div>
+        <div id="status-msg">Initializing network link...</div>
     </div>
 
     <div id="game-container">
@@ -98,34 +99,44 @@
         const gameContainer = document.getElementById("game-container");
         const playerListDiv = document.getElementById("player-list");
         const statusMsg = document.getElementById("status-msg");
+        const btnStart = document.getElementById("btn-start");
 
         let peer, conn, role = ""; 
         let myId = "";
         let myUsername = "";
-        let connections = []; // Host only track list
-        let players = {};     // Synchronized list of players
+        let connections = []; // Host tracker pipeline
+        let players = {};     
         let gameRunning = false;
         let keys = {};
-        let timeRemaining = 180; // 3 minutes
+        let timeRemaining = 180; 
         let timerInterval;
 
+        // Auto-initialize Peer connection immediately on page load
         peer = new Peer(Math.random().toString(36).substring(2, 7).toUpperCase());
-        peer.on('open', id => { myId = id; statusMsg.innerText = "Matchmaker connected."; });
+        peer.on('open', id => { 
+            myId = id; 
+            statusMsg.innerText = "Matchmaker ready."; 
+        });
 
-        // HOST INITIALIZATION
+        // HOST ACTION
         document.getElementById("btn-create").addEventListener("click", () => {
+            if (!myId) return alert("Still waiting for network initialization.");
             myUsername = document.getElementById("username-input").value.trim() || getRandomName();
             role = "host";
-            document.getElementById("player-list-section").style.display = "block";
-            document.getElementById("btn-start").style.display = "block";
-            statusMsg.innerHTML = `Room Code: <b style='color:#9d4edd; font-size:1.3rem;'>${myId}</b>`;
             
-            players[myId] = { id: myId, name: myUsername, x: 100, y: 250, angle: 0, seeker: false, caught: false, inConeTime: 0 };
+            document.getElementById("player-list-section").style.display = "block";
+            btnStart.style.display = "block";
+            statusMsg.innerHTML = `Room Code: <b style='color:#9d4edd; font-size:1.3rem; letter-spacing:1px;'>${myId}</b>`;
+            
+            // Register host inside data layout maps
+            players[myId] = { id: myId, name: myUsername, x: 100, y: 250, angle: 0, seeker: false, caught: false, inConeTime: 0, radius: 14 };
             updateLobbyUI();
 
+            // Open pipeline receiver channel configurations
             peer.on('connection', c => {
                 if (Object.keys(players).length >= 8 || gameRunning) {
-                    setTimeout(() => c.close(), 500); return;
+                    setTimeout(() => c.close(), 500); 
+                    return;
                 }
                 c.on('open', () => {
                     connections.push(c);
@@ -133,43 +144,57 @@
                 });
                 c.on('close', () => {
                     connections = connections.filter(conn => conn !== c);
-                    let leftId = Object.keys(players).find(k => players[k].peerConn === c);
-                    if(leftId) { delete players[leftId]; broadcast({type: "sync", players, timeRemaining}); updateLobbyUI(); }
+                    let leftId = Object.keys(players).find(k => players[k].peerId === c.peer);
+                    if(leftId) { 
+                        delete players[leftId]; 
+                        broadcast({type: "sync", players}); 
+                        updateLobbyUI(); 
+                    }
                 });
             });
+            
+            // Disable configuration inputs to lock setup choice mechanics
+            document.getElementById("btn-create").disabled = true;
+            document.getElementById("btn-join").disabled = true;
         });
 
-        // GUEST INITIALIZATION
+        // GUEST ACTION
         document.getElementById("btn-join").addEventListener("click", () => {
             let code = document.getElementById("room-code-input").value.trim().toUpperCase();
-            if(!code) return alert("Enter code.");
+            if(!code) return alert("Please enter a room code.");
             myUsername = document.getElementById("username-input").value.trim() || getRandomName();
             role = "guest";
-            statusMsg.innerText = "Joining...";
+            statusMsg.innerText = "Connecting to Host room...";
             
             conn = peer.connect(code);
             conn.on('open', () => {
                 conn.send({ type: "join", username: myUsername, id: myId });
                 document.getElementById("player-list-section").style.display = "block";
-                statusMsg.innerText = "Connected! Waiting for host...";
+                statusMsg.innerText = "Joined room! Awaiting host match start...";
             });
             conn.on('data', data => handleNetworkData(data, conn));
-            conn.on('close', () => { alert("Host disconnected."); location.reload(); });
+            conn.on('close', () => { alert("Host closed the session connection."); location.reload(); });
+
+            document.getElementById("btn-create").disabled = true;
+            document.getElementById("btn-join").disabled = true;
         });
 
-        // HOST CLICKS START
-        document.getElementById("btn-start").addEventListener("click", () => {
+        // HOST TRIGGERS GAME START
+        btnStart.addEventListener("click", () => {
             let keysArray = Object.keys(players);
             let randomSeeker = keysArray[Math.floor(Math.random() * keysArray.length)];
             
-            // Spawn Seeker in center, hiders scattered
             keysArray.forEach(k => {
                 players[k].seeker = (k === randomSeeker);
+                players[k].caught = false;
+                players[k].inConeTime = 0;
+                players[k].radius = 14; // Force set radius bounds values tracking explicitly
                 if (players[k].seeker) {
-                    players[k].x = 400; players[k].y = 250;
+                    players[k].x = 400; players[k].y = 250; players[k].angle = 0;
                 } else {
-                    players[k].x = 50 + Math.random() * 200 + (Math.random() > 0.5 ? 450 : 0);
-                    players[k].y = 50 + Math.random() * 400;
+                    players[k].x = 70 + Math.random() * 180 + (Math.random() > 0.5 ? 450 : 0);
+                    players[k].y = 70 + Math.random() * 360;
+                    players[k].angle = Math.random() * Math.PI * 2;
                 }
             });
 
@@ -180,13 +205,15 @@
         function handleNetworkData(data, c) {
             if (role === "host") {
                 if (data.type === "join") {
-                    players[data.id] = { id: data.id, name: data.username, x: 0, y: 0, angle: 0, seeker: false, caught: false, inConeTime: 0, peerConn: c };
-                    broadcast({ type: "sync", players });
+                    players[data.id] = { id: data.id, name: data.username, x: 0, y: 0, angle: 0, seeker: false, caught: false, inConeTime: 0, radius: 14, peerId: c.peer };
+                    broadcast({ type: "sync", players }); // Update all guest lists instantly
                     updateLobbyUI();
                 }
                 if (data.type === "input") {
                     if(players[data.id] && !players[data.id].caught) {
-                        players[data.id].x = data.x; players[data.id].y = data.y; players[data.id].angle = data.angle;
+                        players[data.id].x = data.x; 
+                        players[data.id].y = data.y; 
+                        players[data.id].angle = data.angle;
                     }
                 }
             } else {
@@ -194,8 +221,13 @@
                 if (data.type === "start") { players = data.players; beginMatch(); }
                 if (data.type === "state-update") { 
                     Object.keys(data.players).forEach(k => {
-                        if(k !== myId) { players[k].x = data.players[k].x; players[k].y = data.players[k].y; players[k].angle = data.players[k].angle; }
+                        if(k !== myId) { 
+                            players[k].x = data.players[k].x; 
+                            players[k].y = data.players[k].y; 
+                            players[k].angle = data.players[k].angle; 
+                        }
                         players[k].caught = data.players[k].caught;
+                        players[k].inConeTime = data.players[k].inConeTime;
                     });
                     timeRemaining = data.timeRemaining;
                     updateUIBar();
@@ -209,8 +241,13 @@
         function updateLobbyUI() {
             let count = Object.keys(players).length;
             document.getElementById("count").innerText = count;
-            playerListDiv.innerHTML = Object.keys(players).map(k => `<div>• ${players[k].name} ${k === myId ? '(You)' : ''}</div>`).join('');
-            if (role === "host") document.getElementById("btn-start").disabled = (count < 2);
+            playerListDiv.innerHTML = Object.keys(players).map(k => `<div>• ${players[k].name} ${k === myId ? '<span style="color:#888;">(You)</span>' : ''}</div>`).join('');
+            
+            if (role === "host") {
+                btnStart.disabled = (count < 2);
+                if (count >= 2) btnStart.innerText = "Start Match ⚔️";
+                else btnStart.innerText = "Need 2+ Players to Start";
+            }
         }
 
         function beginMatch() {
@@ -224,7 +261,7 @@
             if (role === "host") {
                 timerInterval = setInterval(() => {
                     timeRemaining--;
-                    if(timeRemaining <= 0) evaluateWinCondition(true); // Time out = hiders win
+                    if(timeRemaining <= 0) evaluateWinCondition(true);
                 }, 1000);
             }
             updateUIBar();
@@ -233,6 +270,7 @@
 
         function updateUIBar() {
             let me = players[myId];
+            if(!me) return;
             document.getElementById("role-display").innerText = me.seeker ? "ROLE: SEEKER 🔎" : (me.caught ? "ROLE: CAUGHT 💀" : "ROLE: HIDER 🏃‍♂️");
             document.getElementById("role-display").style.color = me.seeker ? "#ff2e93" : "#00adb5";
             let mins = Math.floor(timeRemaining / 60).toString().padStart(2, '0');
@@ -248,7 +286,9 @@
                 processRulesEngine();
                 broadcast({ type: "state-update", players, timeRemaining });
             } else {
-                conn.send({ type: "input", id: myId, x: players[myId].x, y: players[myId].y, angle: players[myId].angle });
+                if (players[myId]) {
+                    conn.send({ type: "input", id: myId, x: players[myId].x, y: players[myId].y, angle: players[myId].angle });
+                }
             }
 
             renderGraphics();
@@ -257,9 +297,9 @@
 
         function processLocalMovement() {
             let me = players[myId];
-            if (me.caught) return;
+            if (!me || me.caught) return;
 
-            let speed = me.seeker ? 2.6 : 3.0; // Seeker moves slightly slower to balance fog advantage
+            let speed = me.seeker ? 2.5 : 3.0; 
             let dx = 0, dy = 0;
 
             if (keys['w'] || keys['arrowup']) dy = -1;
@@ -271,7 +311,6 @@
                 me.angle = Math.atan2(dy, dx);
                 me.x += dx * speed; me.y += dy * speed;
                 
-                // Border Collisions
                 if (me.x < 15) me.x = 15; if (me.x > canvas.width - 15) me.x = canvas.width - 15;
                 if (me.y < 15) me.y = 15; if (me.y > canvas.height - 15) me.y = canvas.height - 15;
             }
@@ -282,13 +321,12 @@
             if (!seeker) return;
 
             let hidersAlive = 0;
-            let coneAngle = 0.65; // Vision arc window
+            let coneAngle = 0.65; 
             let coneDist = 180;
 
             Object.keys(players).forEach(k => {
                 let p = players[k];
-                if (p.seeker) return;
-                if (p.caught) return;
+                if (p.seeker || p.caught) return;
 
                 hidersAlive++;
                 let hdx = p.x - seeker.x;
@@ -303,14 +341,14 @@
                 }
 
                 if (inCone) {
-                    p.inConeTime += 1/60; // Adds frame delta step (~16.6ms)
+                    p.inConeTime += 1/60; 
                     if (p.inConeTime >= 1.5) p.caught = true;
                 } else {
                     p.inConeTime = Math.max(0, p.inConeTime - 1/60);
                 }
             });
 
-            if (hidersAlive === 0) evaluateWinCondition(false); // Seeker caught everyone
+            if (hidersAlive === 0) evaluateWinCondition(false); 
         }
 
         function evaluateWinCondition(timeRanOut) {
@@ -330,14 +368,12 @@
         function renderGraphics() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             let me = players[myId];
+            if (!me) return;
 
-            // Render Flashlight / Vision Masking Frame Layer
             if (me.seeker) {
-                // 1. Draw solid complete blackout shadow canopy profile mask over canvas
                 ctx.fillStyle = "#000000";
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-                // 2. Cut out vision cone segment using composite clip properties masking
                 ctx.save();
                 ctx.beginPath();
                 ctx.moveTo(me.x, me.y);
@@ -345,14 +381,12 @@
                 ctx.closePath();
                 ctx.clip();
 
-                // Draw Ground under light beam window area cutout path
                 ctx.fillStyle = "#11111e";
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 drawGameEntities(true);
                 ctx.restore();
             } else {
-                // Hiders see everything natively
-                ctx.fillStyle = me.inConeTime > 0 ? `rgba(180, 20, 20, ${0.2 + (me.inConeTime/1.5)*0.5})` : "#0c0c14";
+                ctx.fillStyle = me.inConeTime > 0 ? `rgba(180, 20, 20, ${0.2 + (me.inConeTime / 1.5) * 0.5})` : "#0c0c14";
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 drawGameEntities(false);
             }
@@ -360,25 +394,22 @@
 
         function drawGameEntities(isSeekerVision) {
             Object.values(players).forEach(p => {
-                if (p.caught && isSeekerVision) return; // Don't draw caught souls to seeker
+                if (p.caught && isSeekerVision) return; 
 
                 ctx.save();
                 ctx.translate(p.x, p.y);
                 ctx.rotate(p.angle);
 
-                // Setup colors neon lighting indicators Profiles
                 let color = p.seeker ? "#ff2e93" : (p.caught ? "#444455" : "#00adb5");
                 ctx.fillStyle = color;
                 ctx.strokeStyle = color;
                 ctx.shadowBlur = p.caught ? 0 : 10;
                 ctx.shadowColor = color;
 
-                // Shape
                 ctx.beginPath();
-                ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
+                ctx.arc(0, 0, 14, 0, Math.PI * 2); // Explicit size backup parameter maps
                 ctx.fill();
 
-                // Direction line indicator marker pointers
                 if(!p.caught) {
                     ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(12,0); ctx.stroke();
                 }
@@ -386,7 +417,6 @@
                 ctx.restore();
                 ctx.shadowBlur = 0;
 
-                // Username Tag Renders Overlay Text maps
                 ctx.fillStyle = p.seeker ? "#ff2e93" : "#ffffff";
                 ctx.font = "10px sans-serif";
                 ctx.textAlign = "center";
