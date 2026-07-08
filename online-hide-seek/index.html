@@ -40,7 +40,7 @@
         }
         #status-msg { color: #8888aa; font-size: 0.9rem; margin-top: 10px; }
         #game-container { display: none; position: relative; text-align: center; }
-        canvas { background-color: #0c0c14; border: 1px solid #1a1a26; border-radius: 12px; }
+        canvas { background-color: #0c0c14; border: 1px solid #1a1a26; border-radius: 12px; cursor: crosshair; }
         #ui-bar {
             width: 100%; display: flex; justify-content: space-between;
             margin-bottom: 10px; font-size: 1.2rem; font-weight: bold;
@@ -50,6 +50,7 @@
             background: rgba(4, 4, 6, 0.95); border-radius: 12px;
             flex-direction: column; align-items: center; justify-content: center;
         }
+        .action-btns { display: flex; gap: 15px; width: 320px; }
     </style>
 </head>
 <body>
@@ -58,11 +59,13 @@
         <a href="../index.html" class="back-btn">← Leave Zone</a>
         <h2>👥 Hide & Seek Online</h2>
         
-        <input type="text" id="username-input" placeholder="Enter Username (Optional)">
-        <button class="btn" id="btn-create">Create Room (Host)</button>
-        <div style="margin: 10px 0; color: #444;">— OR —</div>
-        <input type="text" id="room-code-input" placeholder="Enter Room Code">
-        <button class="btn" id="btn-join" style="background-color: #00adb5;">Join Room</button>
+        <div id="setup-inputs">
+            <input type="text" id="username-input" placeholder="Enter Username (Optional)">
+            <button class="btn" id="btn-create">Create Room (Host)</button>
+            <div style="margin: 10px 0; color: #444;">— OR —</div>
+            <input type="text" id="room-code-input" placeholder="Enter Room Code">
+            <button class="btn" id="btn-join" style="background-color: #00adb5;">Join Room</button>
+        </div>
         
         <div id="player-list-section" style="display:none; margin-top:15px;">
             <div style="font-weight:bold; color:#9d4edd;">Players connected (<span id="count">0</span>/8):</div>
@@ -80,8 +83,12 @@
         <canvas id="gameCanvas" width="800" height="500"></canvas>
         
         <div id="game-over-overlay">
-            <h1 id="win-title" style="font-size:3rem; margin-bottom:20px;">HIDERS WIN</h1>
-            <button class="btn" onclick="location.reload()" style="width:200px; background-color:#ef4444;">Return to Lobby</button>
+            <h1 id="win-title" style="font-size:3rem; margin-bottom:10px;">HIDERS WIN</h1>
+            <div id="rematch-status" style="color:#8888aa; margin-bottom:20px;">Waiting for players to request rematch...</div>
+            <div class="action-btns">
+                <button class="btn" id="btn-rematch-request" style="background-color:#38b000;">Return to Lobby</button>
+                <button class="btn" onclick="location.reload()" style="background-color:#ef4444;">Leave Room</button>
+            </div>
         </div>
     </div>
 
@@ -100,6 +107,8 @@
         const playerListDiv = document.getElementById("player-list");
         const statusMsg = document.getElementById("status-msg");
         const btnStart = document.getElementById("btn-start");
+        const gameOverOverlay = document.getElementById("game-over-overlay");
+        const rematchStatusText = document.getElementById("rematch-status");
 
         let peer, conn, role = ""; 
         let myId = "";
@@ -108,11 +117,11 @@
         let players = {};     
         let gameRunning = false;
         let keys = {};
+        let mouseX = 0, mouseY = 0;
         let timeRemaining = 180; 
-        let releaseCountdown = 5; // 5-second grace period headstart
+        let releaseCountdown = 5; 
         let timerInterval;
 
-        // Permanent Map Architecture Layout Obstacles (X, Y, Width, Height)
         const obstacles = [
             { x: 180, y: 100, w: 40, h: 120 },
             { x: 580, y: 100, w: 40, h: 120 },
@@ -130,6 +139,7 @@
             if (!myId) return alert("Still waiting for network initialization.");
             myUsername = document.getElementById("username-input").value.trim() || getRandomName();
             role = "host";
+            document.getElementById("setup-inputs").style.display = "none";
             document.getElementById("player-list-section").style.display = "block";
             btnStart.style.display = "block";
             statusMsg.innerHTML = `Room Code: <b style='color:#9d4edd; font-size:1.3rem;'>${myId}</b>`;
@@ -142,6 +152,8 @@
                 c.on('open', () => {
                     connections.push(c);
                     c.on('data', data => handleNetworkData(data, c));
+                    // Send initial structural sync
+                    c.send({ type: "sync", players });
                 });
                 c.on('close', () => {
                     connections = connections.filter(conn => conn !== c);
@@ -149,8 +161,6 @@
                     if(leftId) { delete players[leftId]; broadcast({type: "sync", players}); updateLobbyUI(); }
                 });
             });
-            document.getElementById("btn-create").disabled = true;
-            document.getElementById("btn-join").disabled = true;
         });
 
         document.getElementById("btn-join").addEventListener("click", () => {
@@ -163,12 +173,19 @@
             conn = peer.connect(code);
             conn.on('open', () => {
                 conn.send({ type: "join", username: myUsername, id: myId });
+                document.getElementById("setup-inputs").style.display = "none";
                 document.getElementById("player-list-section").style.display = "block";
+                statusMsg.innerText = "Joined room! Awaiting host match start...";
             });
             conn.on('data', data => handleNetworkData(data, conn));
             conn.on('close', () => { alert("Host closed session."); location.reload(); });
-            document.getElementById("btn-create").disabled = true;
-            document.getElementById("btn-join").disabled = true;
+        });
+
+        // Track Mouse Coordinates across the Canvas Element
+        canvas.addEventListener("mousemove", (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
         });
 
         btnStart.addEventListener("click", () => {
@@ -186,7 +203,6 @@
                     players[k].x = 70 + Math.random() * 180 + (Math.random() > 0.5 ? 450 : 0);
                     players[k].y = 70 + Math.random() * 360;
                     players[k].angle = Math.random() * Math.PI * 2;
-                    // Prevent spawning stuck inside obstacles clip box
                     while(checkObstacleCollision(players[k].x, players[k].y, 14)) {
                         players[k].x = 50 + Math.random() * 700;
                         players[k].y = 50 + Math.random() * 400;
@@ -197,6 +213,29 @@
             broadcast({ type: "start", players });
             beginMatch();
         });
+
+        // Trigger Back to Lobby request sync mechanism
+        document.getElementById("btn-rematch-request").addEventListener("click", () => {
+            if (role === "host") {
+                returnToLobbyMenu();
+                broadcast({ type: "return-to-lobby" });
+            } else {
+                conn.send({ type: "request-lobby-return" });
+                document.getElementById("btn-rematch-request").disabled = true;
+                rematchStatusText.innerText = "Sent request to host...";
+            }
+        });
+
+        function returnToLobbyMenu() {
+            gameRunning = false;
+            clearInterval(timerInterval);
+            gameOverOverlay.style.display = "none";
+            gameContainer.style.display = "none";
+            lobby.style.display = "block";
+            document.getElementById("btn-rematch-request").disabled = false;
+            rematchStatusText.innerText = "Waiting for players to request rematch...";
+            updateLobbyUI();
+        }
 
         function handleNetworkData(data, c) {
             if (role === "host") {
@@ -210,9 +249,14 @@
                         players[data.id].x = data.x; players[data.id].y = data.y; players[data.id].angle = data.angle;
                     }
                 }
+                if (data.type === "request-lobby-return") {
+                    returnToLobbyMenu();
+                    broadcast({ type: "return-to-lobby" });
+                }
             } else {
                 if (data.type === "sync") { players = data.players; updateLobbyUI(); }
                 if (data.type === "start") { players = data.players; beginMatch(); }
+                if (data.type === "return-to-lobby") { returnToLobbyMenu(); }
                 if (data.type === "state-update") { 
                     Object.keys(data.players).forEach(k => {
                         if(k !== myId) { players[k].x = data.players[k].x; players[k].y = data.players[k].y; players[k].angle = data.players[k].angle; }
@@ -238,15 +282,21 @@
 
         function beginMatch() {
             lobby.style.display = "none";
+            gameOverOverlay.style.display = "none";
             gameContainer.style.display = "block";
             gameRunning = true;
             releaseCountdown = 5;
             timeRemaining = 180;
             
-            window.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; if([" ", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(e.key)) e.preventDefault();});
-            window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+            // Re-setup movement keyboard event filters
+            if(window.listenersSetup === undefined) {
+                window.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; if([" ", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(e.key)) e.preventDefault();});
+                window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+                window.listenersSetup = true;
+            }
             
             if (role === "host") {
+                clearInterval(timerInterval);
                 timerInterval = setInterval(() => {
                     if (releaseCountdown > 0) {
                         releaseCountdown--;
@@ -285,7 +335,6 @@
             return false;
         }
 
-        // Raycasting check to see if vision is blocked by scenery walls
         function isLineOfSightBlocked(x1, y1, x2, y2) {
             for (let obs of obstacles) {
                 if (lineIntersectsRect(x1, y1, x2, y2, obs)) return true;
@@ -325,8 +374,13 @@
         function processLocalMovement() {
             let me = players[myId];
             if (!me || me.caught) return;
-            if (me.seeker && releaseCountdown > 0) return; // Seeker frozen during release timer grace period
 
+            // MOUSE AIM ENGINE: Angle tracking maps directly to the mouse cursor 
+            me.angle = Math.atan2(mouseY - me.y, mouseX - me.x);
+
+            if (me.seeker && releaseCountdown > 0) return; 
+
+            // WASD/Arrow keys handle stage-relative layout traversal
             let speed = me.seeker ? 2.5 : 3.0; 
             let dx = 0, dy = 0;
 
@@ -336,9 +390,11 @@
             if (keys['d'] || keys['arrowright']) dx = 1;
 
             if (dx !== 0 || dy !== 0) {
-                me.angle = Math.atan2(dy, dx);
+                // Normalize axis vectors 
+                let length = Math.hypot(dx, dy);
+                dx /= length; dy /= length;
+
                 let oldX = me.x, oldY = me.y;
-                
                 me.x += dx * speed;
                 if (me.x < 15 || me.x > canvas.width - 15 || checkObstacleCollision(me.x, me.y, 14)) me.x = oldX;
                 
@@ -360,7 +416,7 @@
                 if (p.seeker || p.caught) return;
 
                 hidersAlive++;
-                if (releaseCountdown > 0) return; // Can't detect during countdown headstart
+                if (releaseCountdown > 0) return; 
 
                 let hdx = p.x - seeker.x;
                 let hdy = p.y - seeker.y;
@@ -371,7 +427,6 @@
                     let angleToHider = Math.atan2(hdy, hdx);
                     let diff = Math.atan2(Math.sin(angleToHider - seeker.angle), Math.cos(angleToHider - seeker.angle));
                     if (Math.abs(diff) < coneAngle) {
-                        // Vision check: Verify obstacle isn't blocking line of sight
                         if (!isLineOfSightBlocked(seeker.x, seeker.y, p.x, p.y)) inCone = true;
                     }
                 }
@@ -398,7 +453,10 @@
             gameRunning = false;
             document.getElementById("win-title").innerText = `${winner} WIN!`;
             document.getElementById("win-title").style.color = winner === "HIDERS" ? "#00adb5" : "#ff2e93";
-            document.getElementById("game-over-overlay").style.display = "flex";
+            
+            // Adjust label text dynamically if player is host
+            document.getElementById("btn-rematch-request").innerText = (role === "host") ? "Return to Lobby" : "Request Return to Lobby";
+            gameOverOverlay.style.display = "flex";
         }
 
         function renderGraphics() {
@@ -407,7 +465,6 @@
             if (!me) return;
 
             if (me.seeker && releaseCountdown === 0) {
-                // Seeker blind/fog layout processing
                 ctx.fillStyle = "#000000";
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -425,11 +482,9 @@
                 drawGameEntities(true);
                 ctx.restore();
             } else {
-                // Hiders and pre-released seeker screen layout rendering
                 ctx.fillStyle = (me.inConeTime > 0 && !me.seeker) ? `rgba(180, 20, 20, ${0.2 + (me.inConeTime / 1.5) * 0.5})` : "#0c0c14";
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 
-                // Draw Seeker's Vision Spotlight Cone for hiders to see dynamically!
                 let seeker = Object.values(players).find(p => p.seeker);
                 if (seeker && releaseCountdown === 0) {
                     ctx.save();
@@ -466,7 +521,6 @@
         function drawGameEntities(isSeekerVision) {
             Object.values(players).forEach(p => {
                 if (p.caught && isSeekerVision) return; 
-                // Hide hiding players from seeker if line of sight is completely blocked by wall architecture geometry
                 if (isSeekerVision && !p.seeker) {
                     let seeker = players[myId];
                     if (isLineOfSightBlocked(seeker.x, seeker.y, p.x, p.y)) return;
