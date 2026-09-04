@@ -47,6 +47,13 @@
         .light-green { background-color: #00e676; color: #000; box-shadow: 0 0 15px #00e676; }
         .light-red { background-color: #ff1744; color: #fff; box-shadow: 0 0 15px #ff1744; }
 
+        .btn-exit {
+            background-color: #ef4444; color: #fff; border: none; padding: 6px 16px;
+            font-size: 0.9rem; border-radius: 20px; cursor: pointer; font-weight: bold;
+            transition: all 0.2s ease;
+        }
+        .btn-exit:hover { background-color: #dc2626; box-shadow: 0 0 10px #ef4444; }
+
         /* Guard Private Control Box (Only visible to the Guard) */
         #guard-controls {
             display: none; background: #161626; border: 1px solid #333355; border-radius: 8px;
@@ -82,6 +89,7 @@
             <div style="font-weight:bold; color:#00f0ff;">Players connected (<span id="count">0</span>/8):</div>
             <div id="player-list"></div>
             <button class="btn" id="btn-start" style="background-color:#00e676; color:#000;" disabled>Start Match (Need 2+ Players)</button>
+            <button class="btn-exit" id="btn-exit-lobby" style="width: 100%; margin-top: 5px;">Exit to Root</button>
         </div>
         <div id="status-msg">Initializing network link...</div>
     </div>
@@ -90,6 +98,7 @@
         <div id="hud">
             <div id="role-display" style="color:#00f0ff;">ROLE: SNEAKER</div>
             <div id="light-indicator" class="light-green">GREEN LIGHT</div>
+            <button class="btn-exit" id="btn-exit-game">Exit</button>
         </div>
         
         <canvas id="gameCanvas" width="800" height="500"></canvas>
@@ -104,404 +113,411 @@
         <div id="game-over-overlay">
             <h1 id="win-title" style="font-size:3rem; margin-bottom:10px; color:#00f0ff;">WINNER!</h1>
             <div style="display: flex; gap: 15px; width: 320px;">
-                <button class="btn" onclick="location.reload()" style="background-color:#ff1744; color:#fff;">Back to Menu</button>
+                <button class="btn" onclick="exitToRoot()" style="background-color:#ff1744; color:#fff;">Back to Root</button>
             </div>
         </div>
     </div>
 
     <script>
         const canvas = document.getElementById("gameCanvas");
-const ctx = canvas.getContext("2d");
-const lobby = document.getElementById("lobby");
-const gameContainer = document.getElementById("game-container");
-const playerListDiv = document.getElementById("player-list");
-const statusMsg = document.getElementById("status-msg");
-const btnStart = document.getElementById("btn-start");
-const lightIndicator = document.getElementById("light-indicator");
-const guardControls = document.getElementById("guard-controls");
-const roleDisplay = document.getElementById("role-display");
-const gameOverOverlay = document.getElementById("game-over-overlay");
+        const ctx = canvas.getContext("2d");
+        const lobby = document.getElementById("lobby");
+        const gameContainer = document.getElementById("game-container");
+        const playerListDiv = document.getElementById("player-list");
+        const statusMsg = document.getElementById("status-msg");
+        const btnStart = document.getElementById("btn-start");
+        const lightIndicator = document.getElementById("light-indicator");
+        const guardControls = document.getElementById("guard-controls");
+        const roleDisplay = document.getElementById("role-display");
+        const gameOverOverlay = document.getElementById("game-over-overlay");
 
-let peer, conn, role = ""; 
-let myId = "";
-let myUsername = "";
-let connections = []; 
-let players = {};     
-let gameRunning = false;
-let keys = {};
+        let peer, conn, role = ""; 
+        let myId = "";
+        let myUsername = "";
+        let connections = []; 
+        let players = {};     
+        let gameRunning = false;
+        let keys = {};
 
-// Light State & Timing
-let currentLight = "GREEN"; 
-let redLightStartTime = 0;
-let lastLightSwitchTime = 0;
-const GRACE_PERIOD_MS = 700; 
-const LIGHT_COOLDOWN_MS = 1000; // 1 second cooldown for guard toggles
+        // Light State & Timing
+        let currentLight = "GREEN"; 
+        let redLightStartTime = 0;
+        let lastLightSwitchTime = 0;
+        const GRACE_PERIOD_MS = 700; 
+        const LIGHT_COOLDOWN_MS = 1000; // 1 second cooldown for guard toggles
 
-peer = new Peer(Math.random().toString(36).substring(2, 7).toUpperCase());
-peer.on('open', id => { myId = id; statusMsg.innerText = "Network ready."; });
-
-document.getElementById("btn-create").addEventListener("click", () => {
-    if (!myId) return;
-    myUsername = document.getElementById("username-input").value.trim() || "Player_" + Math.floor(Math.random()*100);
-    role = "host";
-    document.getElementById("setup-inputs").style.display = "none";
-    document.getElementById("player-list-section").style.display = "block";
-    btnStart.style.display = "block";
-    statusMsg.innerHTML = `Room Code: <b style='color:#00f0ff; font-size:1.3rem;'>${myId}</b>`;
-    
-    players[myId] = { id: myId, name: myUsername, x: 50, y: 250, isGuard: false, score: 0, moving: false, caughtDuringRed: false };
-    updateLobbyUI();
-
-    peer.on('connection', c => {
-        if (Object.keys(players).length >= 8 || gameRunning) { setTimeout(() => c.close(), 500); return; }
-        c.on('open', () => {
-            connections.push(c);
-            c.on('data', data => handleNetworkData(data, c));
-            c.send({ type: "sync", players });
-        });
-        c.on('close', () => {
-            connections = connections.filter(conn => conn !== c);
-            let leftId = Object.keys(players).find(k => players[k].peerId === c.peer);
-            if(leftId) { delete players[leftId]; broadcast({type: "sync", players}); updateLobbyUI(); }
-        });
-    });
-});
-
-document.getElementById("btn-join").addEventListener("click", () => {
-    let code = document.getElementById("room-code-input").value.trim().toUpperCase();
-    if(!code) return alert("Enter room code.");
-    myUsername = document.getElementById("username-input").value.trim() || "Player_" + Math.floor(Math.random()*100);
-    role = "guest";
-    statusMsg.innerText = "Connecting...";
-    
-    conn = peer.connect(code);
-    conn.on('open', () => {
-        conn.send({ type: "join", username: myUsername, id: myId });
-        document.getElementById("setup-inputs").style.display = "none";
-        document.getElementById("player-list-section").style.display = "block";
-    });
-    conn.on('data', data => handleNetworkData(data, conn));
-    conn.on('close', () => { alert("Host disconnected."); location.reload(); });
-});
-
-document.getElementById("btn-set-green").addEventListener("click", () => setLight("GREEN"));
-document.getElementById("btn-set-red").addEventListener("click", () => setLight("RED"));
-
-function setLight(state) {
-    if (!players[myId] || !players[myId].isGuard) return;
-    if (state === currentLight) return;
-
-    let now = Date.now();
-    // Enforce 1-second cooldown between light changes
-    if (now - lastLightSwitchTime < LIGHT_COOLDOWN_MS) return;
-
-    lastLightSwitchTime = now;
-    currentLight = state;
-
-    if (state === "RED") {
-        redLightStartTime = now;
-    } else {
-        // Reset all caught flags when switching back to Green Light
-        Object.values(players).forEach(p => p.caughtDuringRed = false);
-    }
-
-    updateLightUI();
-    broadcast({ type: "light-change", light: currentLight, redStartTime: redLightStartTime });
-}
-
-canvas.addEventListener("mousedown", (e) => {
-    if (!gameRunning || !players[myId] || !players[myId].isGuard) return;
-    
-    const rect = canvas.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
-
-    Object.values(players).forEach(p => {
-        if (!p.isGuard) {
-            let dist = Math.hypot(p.x - clickX, p.y - clickY);
-            if (dist < 20) { 
-                // Guard can tag any player who moved during this Red Light phase
-                if (currentLight === "RED" && p.caughtDuringRed) {
-                    // Send caught player back to the start line
-                    p.x = 50;
-                    p.caughtDuringRed = false;
-                    broadcast({ type: "player-reset", id: p.id, x: 50 });
-                }
-            }
+        function exitToRoot() {
+            window.location.href = "/";
         }
-    });
-});
 
-btnStart.addEventListener("click", () => {
-    if (role === "host") startNewRound();
-});
+        document.getElementById("btn-exit-game").addEventListener("click", exitToRoot);
+        document.getElementById("btn-exit-lobby").addEventListener("click", exitToRoot);
 
-function startNewRound() {
-    let pKeys = Object.keys(players);
-    // Pick a random Guard for every match
-    let randomGuardId = pKeys[Math.floor(Math.random() * pKeys.length)];
+        peer = new Peer(Math.random().toString(36).substring(2, 7).toUpperCase());
+        peer.on('open', id => { myId = id; statusMsg.innerText = "Network ready."; });
 
-    let sneakers = [];
-    pKeys.forEach(k => {
-        players[k].isGuard = (k === randomGuardId);
-        players[k].score = 0;
-        players[k].moving = false;
-        players[k].caughtDuringRed = false;
-        if (!players[k].isGuard) sneakers.push(players[k]);
-    });
-
-    // Guard Position
-    players[randomGuardId].x = 740;
-    players[randomGuardId].y = 250;
-
-    // Sneakers Position
-    sneakers.forEach((p, idx) => {
-        p.x = 50;
-        p.y = 80 + idx * (340 / Math.max(1, sneakers.length - 1));
-    });
-
-    currentLight = "GREEN";
-    lastLightSwitchTime = 0;
-    broadcast({ type: "start", players });
-    beginMatch();
-}
-
-function returnToLobby() {
-    gameRunning = false;
-    gameOverOverlay.style.display = "none";
-    gameContainer.style.display = "none";
-    lobby.style.display = "block";
-    updateLobbyUI();
-}
-
-function handleNetworkData(data, c) {
-    if (role === "host") {
-        if (data.type === "join") {
-            players[data.id] = { id: data.id, name: data.username, x: 50, y: 100, isGuard: false, score: 0, moving: false, caughtDuringRed: false, peerId: c.peer };
-            broadcast({ type: "sync", players });
+        document.getElementById("btn-create").addEventListener("click", () => {
+            if (!myId) return;
+            myUsername = document.getElementById("username-input").value.trim() || "Player_" + Math.floor(Math.random()*100);
+            role = "host";
+            document.getElementById("setup-inputs").style.display = "none";
+            document.getElementById("player-list-section").style.display = "block";
+            btnStart.style.display = "block";
+            statusMsg.innerHTML = `Room Code: <b style='color:#00f0ff; font-size:1.3rem;'>${myId}</b>`;
+            
+            players[myId] = { id: myId, name: myUsername, x: 50, y: 250, isGuard: false, score: 0, moving: false, caughtDuringRed: false };
             updateLobbyUI();
-        }
-        if (data.type === "input") {
-            if (players[data.id]) {
-                players[data.id].x = data.x;
-                players[data.id].y = data.y;
-                players[data.id].moving = data.moving;
-            }
-        }
-        if (data.type === "request-lobby") {
-            returnToLobby();
-            broadcast({ type: "return-to-lobby" });
-        }
-    } else {
-        if (data.type === "sync") { players = data.players; updateLobbyUI(); }
-        if (data.type === "start") { players = data.players; beginMatch(); }
-        if (data.type === "return-to-lobby") { returnToLobby(); }
-        if (data.type === "light-change") {
-            currentLight = data.light;
-            redLightStartTime = data.redStartTime;
-            if (currentLight === "GREEN") {
+
+            peer.on('connection', c => {
+                if (Object.keys(players).length >= 8 || gameRunning) { setTimeout(() => c.close(), 500); return; }
+                c.on('open', () => {
+                    connections.push(c);
+                    c.on('data', data => handleNetworkData(data, c));
+                    c.send({ type: "sync", players });
+                });
+                c.on('close', () => {
+                    connections = connections.filter(conn => conn !== c);
+                    let leftId = Object.keys(players).find(k => players[k].peerId === c.peer);
+                    if(leftId) { delete players[leftId]; broadcast({type: "sync", players}); updateLobbyUI(); }
+                });
+            });
+        });
+
+        document.getElementById("btn-join").addEventListener("click", () => {
+            let code = document.getElementById("room-code-input").value.trim().toUpperCase();
+            if(!code) return alert("Enter room code.");
+            myUsername = document.getElementById("username-input").value.trim() || "Player_" + Math.floor(Math.random()*100);
+            role = "guest";
+            statusMsg.innerText = "Connecting...";
+            
+            conn = peer.connect(code);
+            conn.on('open', () => {
+                conn.send({ type: "join", username: myUsername, id: myId });
+                document.getElementById("setup-inputs").style.display = "none";
+                document.getElementById("player-list-section").style.display = "block";
+            });
+            conn.on('data', data => handleNetworkData(data, conn));
+            conn.on('close', () => { alert("Host disconnected."); exitToRoot(); });
+        });
+
+        document.getElementById("btn-set-green").addEventListener("click", () => setLight("GREEN"));
+        document.getElementById("btn-set-red").addEventListener("click", () => setLight("RED"));
+
+        function setLight(state) {
+            if (!players[myId] || !players[myId].isGuard) return;
+            if (state === currentLight) return;
+
+            let now = Date.now();
+            // Enforce 1-second cooldown between light changes
+            if (now - lastLightSwitchTime < LIGHT_COOLDOWN_MS) return;
+
+            lastLightSwitchTime = now;
+            currentLight = state;
+
+            if (state === "RED") {
+                redLightStartTime = now;
+            } else {
+                // Reset all caught flags when switching back to Green Light
                 Object.values(players).forEach(p => p.caughtDuringRed = false);
             }
+
             updateLightUI();
+            broadcast({ type: "light-change", light: currentLight, redStartTime: redLightStartTime });
         }
-        if (data.type === "state-update") {
-            Object.keys(data.players).forEach(k => {
-                if (k !== myId) {
-                    players[k].x = data.players[k].x;
-                    players[k].y = data.players[k].y;
-                    players[k].moving = data.players[k].moving;
+
+        canvas.addEventListener("mousedown", (e) => {
+            if (!gameRunning || !players[myId] || !players[myId].isGuard) return;
+            
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+
+            Object.values(players).forEach(p => {
+                if (!p.isGuard) {
+                    let dist = Math.hypot(p.x - clickX, p.y - clickY);
+                    if (dist < 20) { 
+                        // Guard can tag any player who moved during this Red Light phase
+                        if (currentLight === "RED" && p.caughtDuringRed) {
+                            // Send caught player back to the start line
+                            p.x = 50;
+                            p.caughtDuringRed = false;
+                            broadcast({ type: "player-reset", id: p.id, x: 50 });
+                        }
+                    }
                 }
-                players[k].score = data.players[k].score;
-                players[k].caughtDuringRed = data.players[k].caughtDuringRed;
             });
+        });
+
+        btnStart.addEventListener("click", () => {
+            if (role === "host") startNewRound();
+        });
+
+        function startNewRound() {
+            let pKeys = Object.keys(players);
+            // Pick a random Guard for every match
+            let randomGuardId = pKeys[Math.floor(Math.random() * pKeys.length)];
+
+            let sneakers = [];
+            pKeys.forEach(k => {
+                players[k].isGuard = (k === randomGuardId);
+                players[k].score = 0;
+                players[k].moving = false;
+                players[k].caughtDuringRed = false;
+                if (!players[k].isGuard) sneakers.push(players[k]);
+            });
+
+            // Guard Position
+            players[randomGuardId].x = 740;
+            players[randomGuardId].y = 250;
+
+            // Sneakers Position
+            sneakers.forEach((p, idx) => {
+                p.x = 50;
+                p.y = 80 + idx * (340 / Math.max(1, sneakers.length - 1));
+            });
+
+            currentLight = "GREEN";
+            lastLightSwitchTime = 0;
+            broadcast({ type: "start", players });
+            beginMatch();
         }
-        if (data.type === "player-reset") {
-            if (players[data.id]) {
-                players[data.id].x = data.x;
-                players[data.id].caughtDuringRed = false;
+
+        function returnToLobby() {
+            gameRunning = false;
+            gameOverOverlay.style.display = "none";
+            gameContainer.style.display = "none";
+            lobby.style.display = "block";
+            updateLobbyUI();
+        }
+
+        function handleNetworkData(data, c) {
+            if (role === "host") {
+                if (data.type === "join") {
+                    players[data.id] = { id: data.id, name: data.username, x: 50, y: 100, isGuard: false, score: 0, moving: false, caughtDuringRed: false, peerId: c.peer };
+                    broadcast({ type: "sync", players });
+                    updateLobbyUI();
+                }
+                if (data.type === "input") {
+                    if (players[data.id]) {
+                        players[data.id].x = data.x;
+                        players[data.id].y = data.y;
+                        players[data.id].moving = data.moving;
+                    }
+                }
+                if (data.type === "request-lobby") {
+                    returnToLobby();
+                    broadcast({ type: "return-to-lobby" });
+                }
+            } else {
+                if (data.type === "sync") { players = data.players; updateLobbyUI(); }
+                if (data.type === "start") { players = data.players; beginMatch(); }
+                if (data.type === "return-to-lobby") { returnToLobby(); }
+                if (data.type === "light-change") {
+                    currentLight = data.light;
+                    redLightStartTime = data.redStartTime;
+                    if (currentLight === "GREEN") {
+                        Object.values(players).forEach(p => p.caughtDuringRed = false);
+                    }
+                    updateLightUI();
+                }
+                if (data.type === "state-update") {
+                    Object.keys(data.players).forEach(k => {
+                        if (k !== myId) {
+                            players[k].x = data.players[k].x;
+                            players[k].y = data.players[k].y;
+                            players[k].moving = data.players[k].moving;
+                        }
+                        players[k].score = data.players[k].score;
+                        players[k].caughtDuringRed = data.players[k].caughtDuringRed;
+                    });
+                }
+                if (data.type === "player-reset") {
+                    if (players[data.id]) {
+                        players[data.id].x = data.x;
+                        players[data.id].caughtDuringRed = false;
+                    }
+                }
+                if (data.type === "end") { triggerEndGame(data.winnerName); }
             }
         }
-        if (data.type === "end") { triggerEndGame(data.winnerName); }
-    }
-}
 
-function broadcast(msg) { connections.forEach(c => c.send(msg)); }
+        function broadcast(msg) { connections.forEach(c => c.send(msg)); }
 
-function updateLobbyUI() {
-    let count = Object.keys(players).length;
-    document.getElementById("count").innerText = count;
-    playerListDiv.innerHTML = Object.keys(players).map(k => `<div>• ${players[k].name} ${k === myId ? '<span style="color:#888;">(You)</span>' : ''}</div>`).join('');
-    if (role === "host") btnStart.disabled = (count < 2);
-}
-
-function updateLightUI() {
-    if (currentLight === "GREEN") {
-        lightIndicator.innerText = "GREEN LIGHT";
-        lightIndicator.className = "light-green";
-    } else {
-        lightIndicator.innerText = "RED LIGHT";
-        lightIndicator.className = "light-red";
-    }
-}
-
-function beginMatch() {
-    lobby.style.display = "none";
-    gameOverOverlay.style.display = "none";
-    gameContainer.style.display = "block";
-    gameRunning = true;
-    
-    let isMeGuard = players[myId] && players[myId].isGuard;
-    if (isMeGuard) {
-        guardControls.style.display = "block";
-        roleDisplay.innerText = "ROLE: GUARD (Tag players who moved on Red)";
-    } else {
-        guardControls.style.display = "none";
-        roleDisplay.innerText = "ROLE: SNEAKER (Cross line to score!)";
-    }
-
-    updateLightUI();
-
-    if (!window.listenersSetup) {
-        window.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; });
-        window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
-        window.listenersSetup = true;
-    }
-    requestAnimationFrame(gameLoop);
-}
-
-function gameLoop() {
-    if (!gameRunning) return;
-    
-    processMovement();
-    
-    if (role === "host") {
-        processRules();
-        broadcast({ type: "state-update", players });
-    } else {
-        if (players[myId]) {
-            conn.send({ 
-                type: "input", 
-                id: myId, 
-                x: players[myId].x, 
-                y: players[myId].y, 
-                moving: players[myId].moving 
-            });
+        function updateLobbyUI() {
+            let count = Object.keys(players).length;
+            document.getElementById("count").innerText = count;
+            playerListDiv.innerHTML = Object.keys(players).map(k => `<div>• ${players[k].name} ${k === myId ? '<span style="color:#888;">(You)</span>' : ''}</div>`).join('');
+            if (role === "host") btnStart.disabled = (count < 2);
         }
-    }
 
-    renderGraphics();
-    requestAnimationFrame(gameLoop);
-}
-
-function processMovement() {
-    let me = players[myId];
-    if (!me || me.isGuard) return;
-
-    let speed = 2.2;
-    let dx = 0, dy = 0;
-    if (keys['w'] || keys['arrowup']) dy = -1;
-    if (keys['s'] || keys['arrowdown']) dy = 1;
-    if (keys['a'] || keys['arrowleft']) dx = -1;
-    if (keys['d'] || keys['arrowright']) dx = 1;
-
-    me.moving = (dx !== 0 || dy !== 0);
-
-    // Track Red-Light Violations
-    if (currentLight === "RED") {
-        let timeSinceRed = Date.now() - redLightStartTime;
-        if (timeSinceRed > GRACE_PERIOD_MS && me.moving) {
-            me.caughtDuringRed = true; // Permanently flagged for this Red Light duration
-        }
-    }
-
-    if (me.moving) {
-        let len = Math.hypot(dx, dy);
-        me.x += (dx / len) * speed;
-        me.y += (dy / len) * speed;
-        me.x = Math.max(20, Math.min(canvas.width - 20, me.x));
-        me.y = Math.max(20, Math.min(canvas.height - 20, me.y));
-    }
-}
-
-function processRules() {
-    // Check line crossing (First player to 3 points wins match)
-    Object.values(players).forEach(p => {
-        if (!p.isGuard && p.x >= 700) {
-            p.score = (p.score || 0) + 1;
-            p.x = 50; // Reset position to start line
-            p.caughtDuringRed = false;
-
-            if (p.score >= 3) {
-                broadcast({ type: "end", winnerName: p.name });
-                triggerEndGame(p.name);
+        function updateLightUI() {
+            if (currentLight === "GREEN") {
+                lightIndicator.innerText = "GREEN LIGHT";
+                lightIndicator.className = "light-green";
+            } else {
+                lightIndicator.innerText = "RED LIGHT";
+                lightIndicator.className = "light-red";
             }
         }
-    });
-}
 
-function triggerEndGame(winnerName) {
-    gameRunning = false;
-    document.getElementById("win-title").innerText = `${winnerName} WINS!`;
-    
-    let btnBox = gameOverOverlay.querySelector("div");
-    btnBox.innerHTML = `
-        <button class="btn" id="btn-return-lobby" style="background-color:#38b000; color:#fff;">Return to Lobby</button>
-        <button class="btn" onclick="location.reload()" style="background-color:#ef4444; color:#fff;">Leave</button>
-    `;
-    
-    document.getElementById("btn-return-lobby").addEventListener("click", () => {
-        if (role === "host") {
-            returnToLobby();
-            broadcast({ type: "return-to-lobby" });
-        } else {
-            conn.send({ type: "request-lobby" });
-        }
-    });
+        function beginMatch() {
+            lobby.style.display = "none";
+            gameOverOverlay.style.display = "none";
+            gameContainer.style.display = "block";
+            gameRunning = true;
+            
+            let isMeGuard = players[myId] && players[myId].isGuard;
+            if (isMeGuard) {
+                guardControls.style.display = "block";
+                roleDisplay.innerText = "ROLE: GUARD (Tag players who moved on Red)";
+            } else {
+                guardControls.style.display = "none";
+                roleDisplay.innerText = "ROLE: SNEAKER (Cross line to score!)";
+            }
 
-    gameOverOverlay.style.display = "flex";
-}
+            updateLightUI();
 
-function renderGraphics() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Draw Finish Line
-    ctx.strokeStyle = "#ff0055";
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(700, 0);
-    ctx.lineTo(700, canvas.height);
-    ctx.stroke();
-
-    Object.values(players).forEach(p => {
-        ctx.save();
-        ctx.translate(p.x, p.y);
-
-        if (p.isGuard) {
-            ctx.fillStyle = "#ff0055";
-            ctx.shadowBlur = 15;
-            ctx.shadowColor = "#ff0055";
-            ctx.beginPath();
-            ctx.arc(0, 0, 18, 0, Math.PI * 2);
-            ctx.fill();
-        } else {
-            ctx.fillStyle = p.caughtDuringRed ? "#ff9900" : "#00f0ff";
-            ctx.shadowBlur = p.moving ? 10 : 0;
-            ctx.shadowColor = p.caughtDuringRed ? "#ff9900" : "#00f0ff";
-            ctx.beginPath();
-            ctx.arc(0, 0, 14, 0, Math.PI * 2);
-            ctx.fill();
+            if (!window.listenersSetup) {
+                window.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; });
+                window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+                window.listenersSetup = true;
+            }
+            requestAnimationFrame(gameLoop);
         }
 
-        ctx.restore();
+        function gameLoop() {
+            if (!gameRunning) return;
+            
+            processMovement();
+            
+            if (role === "host") {
+                processRules();
+                broadcast({ type: "state-update", players });
+            } else {
+                if (players[myId]) {
+                    conn.send({ 
+                        type: "input", 
+                        id: myId, 
+                        x: players[myId].x, 
+                        y: players[myId].y, 
+                        moving: players[myId].moving 
+                    });
+                }
+            }
 
-        // Name tag & Score
-        ctx.fillStyle = "#ffffff";
-        ctx.font = "11px sans-serif";
-        ctx.textAlign = "center";
-        let text = p.isGuard ? `${p.name} [GUARD]` : `${p.name} (${p.score || 0} pts)`;
-        ctx.fillText(text, p.x, p.y - 22);
-    });
-}
+            renderGraphics();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function processMovement() {
+            let me = players[myId];
+            if (!me || me.isGuard) return;
+
+            let speed = 2.2;
+            let dx = 0, dy = 0;
+            if (keys['w'] || keys['arrowup']) dy = -1;
+            if (keys['s'] || keys['arrowdown']) dy = 1;
+            if (keys['a'] || keys['arrowleft']) dx = -1;
+            if (keys['d'] || keys['arrowright']) dx = 1;
+
+            me.moving = (dx !== 0 || dy !== 0);
+
+            // Track Red-Light Violations
+            if (currentLight === "RED") {
+                let timeSinceRed = Date.now() - redLightStartTime;
+                if (timeSinceRed > GRACE_PERIOD_MS && me.moving) {
+                    me.caughtDuringRed = true; // Permanently flagged for this Red Light duration
+                }
+            }
+
+            if (me.moving) {
+                let len = Math.hypot(dx, dy);
+                me.x += (dx / len) * speed;
+                me.y += (dy / len) * speed;
+                me.x = Math.max(20, Math.min(canvas.width - 20, me.x));
+                me.y = Math.max(20, Math.min(canvas.height - 20, me.y));
+            }
+        }
+
+        function processRules() {
+            // Check line crossing (First player to 3 points wins match)
+            Object.values(players).forEach(p => {
+                if (!p.isGuard && p.x >= 700) {
+                    p.score = (p.score || 0) + 1;
+                    p.x = 50; // Reset position to start line
+                    p.caughtDuringRed = false;
+
+                    if (p.score >= 3) {
+                        broadcast({ type: "end", winnerName: p.name });
+                        triggerEndGame(p.name);
+                    }
+                }
+            });
+        }
+
+        function triggerEndGame(winnerName) {
+            gameRunning = false;
+            document.getElementById("win-title").innerText = `${winnerName} WINS!`;
+            
+            let btnBox = gameOverOverlay.querySelector("div");
+            btnBox.innerHTML = `
+                <button class="btn" id="btn-return-lobby" style="background-color:#38b000; color:#fff;">Return to Lobby</button>
+                <button class="btn" onclick="exitToRoot()" style="background-color:#ef4444; color:#fff;">Leave to Root</button>
+            `;
+            
+            document.getElementById("btn-return-lobby").addEventListener("click", () => {
+                if (role === "host") {
+                    returnToLobby();
+                    broadcast({ type: "return-to-lobby" });
+                } else {
+                    conn.send({ type: "request-lobby" });
+                }
+            });
+
+            gameOverOverlay.style.display = "flex";
+        }
+
+        function renderGraphics() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Finish Line
+            ctx.strokeStyle = "#ff0055";
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(700, 0);
+            ctx.lineTo(700, canvas.height);
+            ctx.stroke();
+
+            Object.values(players).forEach(p => {
+                ctx.save();
+                ctx.translate(p.x, p.y);
+
+                if (p.isGuard) {
+                    ctx.fillStyle = "#ff0055";
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = "#ff0055";
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 18, 0, Math.PI * 2);
+                    ctx.fill();
+                } else {
+                    ctx.fillStyle = p.caughtDuringRed ? "#ff9900" : "#00f0ff";
+                    ctx.shadowBlur = p.moving ? 10 : 0;
+                    ctx.shadowColor = p.caughtDuringRed ? "#ff9900" : "#00f0ff";
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 14, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                ctx.restore();
+
+                // Name tag & Score
+                ctx.fillStyle = "#ffffff";
+                ctx.font = "11px sans-serif";
+                ctx.textAlign = "center";
+                let text = p.isGuard ? `${p.name} [GUARD]` : `${p.name} (${p.score || 0} pts)`;
+                ctx.fillText(text, p.x, p.y - 22);
+            });
+        }
     </script>
 </body>
 </html>
