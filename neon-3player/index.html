@@ -91,323 +91,347 @@
 
     <script>
         const colorPalette = ["#00f0ff", "#ff007f", "#39ff14", "#ffe600", "#ff6600", "#b066ff"];
+
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+const lobby = document.getElementById("lobby");
+const gameContainer = document.getElementById("game-container");
+const playerListDiv = document.getElementById("player-list");
+const statusMsg = document.getElementById("status-msg");
+const btnStart = document.getElementById("btn-start");
+const gameOverOverlay = document.getElementById("game-over-overlay");
+
+let peer, conn, role = ""; 
+let myId = "";
+let myUsername = "";
+let connections = []; 
+let players = {};     
+let projectiles = [];
+let gameRunning = false;
+let keys = {};
+let mouseX = 0, mouseY = 0;
+let lastShotTime = 0;
+
+peer = new Peer(Math.random().toString(36).substring(2, 7).toUpperCase());
+peer.on('open', id => { myId = id; statusMsg.innerText = "Network ready."; });
+
+document.getElementById("btn-create").addEventListener("click", () => {
+    if (!myId) return;
+    myUsername = document.getElementById("username-input").value.trim() || "Slinger_" + Math.floor(Math.random()*100);
+    role = "host";
+    document.getElementById("setup-inputs").style.display = "none";
+    document.getElementById("player-list-section").style.display = "block";
+    btnStart.style.display = "block";
+    statusMsg.innerHTML = `Room Code: <b style='color:#00f0ff; font-size:1.3rem;'>${myId}</b>`;
+    
+    players[myId] = { id: myId, name: myUsername, x: 100, y: 250, angle: 0, lives: 3, color: colorPalette[0] };
+    updateLobbyUI();
+
+    peer.on('connection', c => {
+        if (Object.keys(players).length >= 8 || gameRunning) { setTimeout(() => c.close(), 500); return; }
+        c.on('open', () => {
+            connections.push(c);
+            c.on('data', data => handleNetworkData(data, c));
+            c.send({ type: "sync", players });
+        });
+        c.on('close', () => {
+            connections = connections.filter(conn => conn !== c);
+            let leftId = Object.keys(players).find(k => players[k].peerId === c.peer);
+            if(leftId) { delete players[leftId]; broadcast({type: "sync", players}); updateLobbyUI(); }
+        });
+    });
+});
+
+document.getElementById("btn-join").addEventListener("click", () => {
+    let code = document.getElementById("room-code-input").value.trim().toUpperCase();
+    if(!code) return alert("Enter room code.");
+    myUsername = document.getElementById("username-input").value.trim() || "Slinger_" + Math.floor(Math.random()*100);
+    role = "guest";
+    statusMsg.innerText = "Connecting...";
+    
+    conn = peer.connect(code);
+    conn.on('open', () => {
+        conn.send({ type: "join", username: myUsername, id: myId });
+        document.getElementById("setup-inputs").style.display = "none";
+        document.getElementById("player-list-section").style.display = "block";
+    });
+    conn.on('data', data => handleNetworkData(data, conn));
+    conn.on('close', () => { alert("Host disconnected."); location.reload(); });
+});
+
+canvas.addEventListener("mousemove", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    mouseX = e.clientX - rect.left;
+    mouseY = e.clientY - rect.top;
+});
+
+canvas.addEventListener("mousedown", () => {
+    if (!gameRunning) return;
+    let me = players[myId];
+    if (!me || me.lives <= 0) return;
+
+    let now = Date.now();
+    if (now - lastShotTime > 400) { 
+        lastShotTime = now;
+        let shotData = {
+            x: me.x + Math.cos(me.angle) * 20,
+            y: me.y + Math.sin(me.angle) * 20,
+            vx: Math.cos(me.angle) * 8,
+            vy: Math.sin(me.angle) * 8,
+            ownerId: myId,
+            color: me.color,
+            bounces: 0 // Track total wall bounces
+        };
         
-        const canvas = document.getElementById("gameCanvas");
-        const ctx = canvas.getContext("2d");
-        const lobby = document.getElementById("lobby");
-        const gameContainer = document.getElementById("game-container");
-        const playerListDiv = document.getElementById("player-list");
-        const statusMsg = document.getElementById("status-msg");
-        const btnStart = document.getElementById("btn-start");
-        const gameOverOverlay = document.getElementById("game-over-overlay");
+        if (role === "host") {
+            projectiles.push({ ...shotData, id: Math.random() });
+        } else {
+            conn.send({ type: "shoot", shot: shotData });
+        }
+    }
+});
 
-        let peer, conn, role = ""; 
-        let myId = "";
-        let myUsername = "";
-        let connections = []; 
-        let players = {};     
-        let projectiles = [];
-        let gameRunning = false;
-        let keys = {};
-        let mouseX = 0, mouseY = 0;
-        let lastShotTime = 0;
+btnStart.addEventListener("click", () => {
+    let keysArray = Object.keys(players);
+    keysArray.forEach((k, index) => {
+        players[k].lives = 3;
+        players[k].color = colorPalette[index % colorPalette.length];
+        players[k].x = 150 + (index * 220) % 600;
+        players[k].y = 120 + Math.floor(index / 3) * 180;
+    });
+    projectiles = [];
+    broadcast({ type: "start", players });
+    beginMatch();
+});
 
-        peer = new Peer(Math.random().toString(36).substring(2, 7).toUpperCase());
-        peer.on('open', id => { myId = id; statusMsg.innerText = "Network ready."; });
+document.getElementById("btn-rematch").addEventListener("click", () => {
+    if (role === "host") {
+        returnToLobby();
+        broadcast({ type: "return-to-lobby" });
+    } else {
+        conn.send({ type: "request-lobby" });
+    }
+});
 
-        document.getElementById("btn-create").addEventListener("click", () => {
-            if (!myId) return;
-            myUsername = document.getElementById("username-input").value.trim() || "Slinger_" + Math.floor(Math.random()*100);
-            role = "host";
-            document.getElementById("setup-inputs").style.display = "none";
-            document.getElementById("player-list-section").style.display = "block";
-            btnStart.style.display = "block";
-            statusMsg.innerHTML = `Room Code: <b style='color:#00f0ff; font-size:1.3rem;'>${myId}</b>`;
-            
-            players[myId] = { id: myId, name: myUsername, x: 100, y: 250, angle: 0, lives: 3, color: colorPalette[0] };
-            updateLobbyUI();
+function returnToLobby() {
+    gameRunning = false;
+    gameOverOverlay.style.display = "none";
+    gameContainer.style.display = "none";
+    lobby.style.display = "block";
+    updateLobbyUI();
+}
 
-            peer.on('connection', c => {
-                if (Object.keys(players).length >= 8 || gameRunning) { setTimeout(() => c.close(), 500); return; }
-                c.on('open', () => {
-                    connections.push(c);
-                    c.on('data', data => handleNetworkData(data, c));
-                    c.send({ type: "sync", players });
-                });
-                c.on('close', () => {
-                    connections = connections.filter(conn => conn !== c);
-                    let leftId = Object.keys(players).find(k => players[k].peerId === c.peer);
-                    if(leftId) { delete players[leftId]; broadcast({type: "sync", players}); updateLobbyUI(); }
-                });
-            });
-        });
-
-        document.getElementById("btn-join").addEventListener("click", () => {
-            let code = document.getElementById("room-code-input").value.trim().toUpperCase();
-            if(!code) return alert("Enter room code.");
-            myUsername = document.getElementById("username-input").value.trim() || "Slinger_" + Math.floor(Math.random()*100);
-            role = "guest";
-            statusMsg.innerText = "Connecting...";
-            
-            conn = peer.connect(code);
-            conn.on('open', () => {
-                conn.send({ type: "join", username: myUsername, id: myId });
-                document.getElementById("setup-inputs").style.display = "none";
-                document.getElementById("player-list-section").style.display = "block";
-            });
-            conn.on('data', data => handleNetworkData(data, conn));
-            conn.on('close', () => { alert("Host disconnected."); location.reload(); });
-        });
-
-        canvas.addEventListener("mousemove", (e) => {
-            const rect = canvas.getBoundingClientRect();
-            mouseX = e.clientX - rect.left;
-            mouseY = e.clientY - rect.top;
-        });
-
-        canvas.addEventListener("mousedown", () => {
-            if (!gameRunning) return;
-            let me = players[myId];
-            if (!me || me.lives <= 0) return;
-
-            let now = Date.now();
-            if (now - lastShotTime > 400) { // 400ms shoot cooldown
-                lastShotTime = now;
-                let shotData = {
-                    x: me.x + Math.cos(me.angle) * 20,
-                    y: me.y + Math.sin(me.angle) * 20,
-                    vx: Math.cos(me.angle) * 8,
-                    vy: Math.sin(me.angle) * 8,
-                    ownerId: myId,
-                    color: me.color
-                };
-                
-                if (role === "host") {
-                    projectiles.push({ ...shotData, id: Math.random() });
-                } else {
-                    conn.send({ type: "shoot", shot: shotData });
-                }
-            }
-        });
-
-        btnStart.addEventListener("click", () => {
-            let keysArray = Object.keys(players);
-            keysArray.forEach((k, index) => {
-                players[k].lives = 3;
-                players[k].color = colorPalette[index % colorPalette.length];
-                players[k].x = 150 + (index * 220) % 600;
-                players[k].y = 120 + Math.floor(index / 3) * 180;
-            });
-            projectiles = [];
-            broadcast({ type: "start", players });
-            beginMatch();
-        });
-
-        document.getElementById("btn-rematch").addEventListener("click", () => {
-            if (role === "host") {
-                returnToLobby();
-                broadcast({ type: "return-to-lobby" });
-            } else {
-                conn.send({ type: "request-lobby" });
-            }
-        });
-
-        function returnToLobby() {
-            gameRunning = false;
-            gameOverOverlay.style.display = "none";
-            gameContainer.style.display = "none";
-            lobby.style.display = "block";
+function handleNetworkData(data, c) {
+    if (role === "host") {
+        if (data.type === "join") {
+            players[data.id] = { id: data.id, name: data.username, x: 0, y: 0, angle: 0, lives: 3, color: colorPalette[Object.keys(players).length % colorPalette.length], peerId: c.peer };
+            broadcast({ type: "sync", players });
             updateLobbyUI();
         }
-
-        function handleNetworkData(data, c) {
-            if (role === "host") {
-                if (data.type === "join") {
-                    players[data.id] = { id: data.id, name: data.username, x: 0, y: 0, angle: 0, lives: 3, color: colorPalette[Object.keys(players).length % colorPalette.length], peerId: c.peer };
-                    broadcast({ type: "sync", players });
-                    updateLobbyUI();
-                }
-                if (data.type === "input") {
-                    if(players[data.id] && players[data.id].lives > 0) {
-                        players[data.id].x = data.x; players[data.id].y = data.y; players[data.id].angle = data.angle;
-                    }
-                }
-                if (data.type === "shoot") {
-                    projectiles.push({ ...data.shot, id: Math.random() });
-                }
-                if (data.type === "request-lobby") {
-                    returnToLobby();
-                    broadcast({ type: "return-to-lobby" });
-                }
-            } else {
-                if (data.type === "sync") { players = data.players; updateLobbyUI(); }
-                if (data.type === "start") { players = data.players; beginMatch(); }
-                if (data.type === "return-to-lobby") { returnToLobby(); }
-                if (data.type === "state-update") { 
-                    Object.keys(data.players).forEach(k => {
-                        if(k !== myId) {
-                            players[k].x = data.players[k].x; 
-                            players[k].y = data.players[k].y; 
-                            players[k].angle = data.players[k].angle; 
-                        }
-                        players[k].lives = data.players[k].lives;
-                    });
-                    projectiles = data.projectiles;
-                    updateUIBar();
-                }
-                if (data.type === "end") { triggerEndGame(data.winnerName); }
+        if (data.type === "input") {
+            if(players[data.id] && players[data.id].lives > 0) {
+                players[data.id].x = data.x; players[data.id].y = data.y; players[data.id].angle = data.angle;
             }
         }
-
-        function broadcast(msg) { connections.forEach(c => c.send(msg)); }
-
-        function updateLobbyUI() {
-            let count = Object.keys(players).length;
-            document.getElementById("count").innerText = count;
-            playerListDiv.innerHTML = Object.keys(players).map(k => `<div>• ${players[k].name} ${k === myId ? '<span style="color:#888;">(You)</span>' : ''}</div>`).join('');
-            if (role === "host") btnStart.disabled = (count < 2);
+        if (data.type === "shoot") {
+            projectiles.push({ ...data.shot, id: Math.random() });
         }
-
-        function beginMatch() {
-            lobby.style.display = "none";
-            gameOverOverlay.style.display = "none";
-            gameContainer.style.display = "block";
-            gameRunning = true;
-            
-            if(!window.listenersSetup) {
-                window.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; });
-                window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
-                window.listenersSetup = true;
-            }
+        if (data.type === "request-lobby") {
+            returnToLobby();
+            broadcast({ type: "return-to-lobby" });
+        }
+    } else {
+        if (data.type === "sync") { players = data.players; updateLobbyUI(); }
+        if (data.type === "start") { players = data.players; beginMatch(); }
+        if (data.type === "return-to-lobby") { returnToLobby(); }
+        if (data.type === "state-update") { 
+            Object.keys(data.players).forEach(k => {
+                if(k !== myId) {
+                    players[k].x = data.players[k].x; 
+                    players[k].y = data.players[k].y; 
+                    players[k].angle = data.players[k].angle; 
+                }
+                players[k].lives = data.players[k].lives;
+            });
+            projectiles = data.projectiles;
             updateUIBar();
-            requestAnimationFrame(gameLoop);
+        }
+        if (data.type === "end") { triggerEndGame(data.winnerName); }
+    }
+}
+
+function broadcast(msg) { connections.forEach(c => c.send(msg)); }
+
+function updateLobbyUI() {
+    let count = Object.keys(players).length;
+    document.getElementById("count").innerText = count;
+    playerListDiv.innerHTML = Object.keys(players).map(k => `<div>• ${players[k].name} ${k === myId ? '<span style="color:#888;">(You)</span>' : ''}</div>`).join('');
+    if (role === "host") btnStart.disabled = (count < 2);
+}
+
+function beginMatch() {
+    lobby.style.display = "none";
+    gameOverOverlay.style.display = "none";
+    gameContainer.style.display = "block";
+    gameRunning = true;
+    
+    if(!window.listenersSetup) {
+        window.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; });
+        window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+        window.listenersSetup = true;
+    }
+    updateUIBar();
+    requestAnimationFrame(gameLoop);
+}
+
+function updateUIBar() {
+    let me = players[myId];
+    if(me) document.getElementById("lives-display").innerText = `SHIELDS: ${Math.max(0, me.lives)}`;
+    let aliveCount = Object.values(players).filter(p => p.lives > 0).length;
+    document.getElementById("players-alive-display").innerText = `PLAYERS ALIVE: ${aliveCount}`;
+}
+
+function gameLoop() {
+    if (!gameRunning) return;
+    processMovement();
+    
+    if (role === "host") {
+        processPhysics();
+        broadcast({ type: "state-update", players, projectiles });
+    } else {
+        if (players[myId]) conn.send({ type: "input", id: myId, x: players[myId].x, y: players[myId].y, angle: players[myId].angle });
+    }
+
+    renderGraphics();
+    requestAnimationFrame(gameLoop);
+}
+
+function processMovement() {
+    let me = players[myId];
+    if (!me || me.lives <= 0) return;
+
+    me.angle = Math.atan2(mouseY - me.y, mouseX - me.x);
+
+    let speed = 3.2;
+    let dx = 0, dy = 0;
+    if (keys['w'] || keys['arrowup']) dy = -1;
+    if (keys['s'] || keys['arrowdown']) dy = 1;
+    if (keys['a'] || keys['arrowleft']) dx = -1;
+    if (keys['d'] || keys['arrowright']) dx = 1;
+
+    if (dx !== 0 || dy !== 0) {
+        let len = Math.hypot(dx, dy);
+        me.x += (dx / len) * speed;
+        me.y += (dy / len) * speed;
+        me.x = Math.max(16, Math.min(canvas.width - 16, me.x));
+        me.y = Math.max(16, Math.min(canvas.height - 16, me.y));
+    }
+}
+
+function processPhysics() {
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+        let p = projectiles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+
+        let bounced = false;
+
+        // Check horizontal wall collision
+        if (p.x <= 8 || p.x >= canvas.width - 8) {
+            p.vx *= -1;
+            p.x = p.x <= 8 ? 9 : canvas.width - 9;
+            bounced = true;
+        }
+        // Check vertical wall collision
+        if (p.y <= 8 || p.y >= canvas.height - 8) {
+            p.vy *= -1;
+            p.y = p.y <= 8 ? 9 : canvas.height - 9;
+            bounced = true;
         }
 
-        function updateUIBar() {
-            let me = players[myId];
-            if(me) document.getElementById("lives-display").innerText = `SHIELDS: ${Math.max(0, me.lives)}`;
-            let aliveCount = Object.values(players).filter(p => p.lives > 0).length;
-            document.getElementById("players-alive-display").innerText = `PLAYERS ALIVE: ${aliveCount}`;
-        }
-
-        function gameLoop() {
-            if (!gameRunning) return;
-            processMovement();
-            
-            if (role === "host") {
-                processPhysics();
-                broadcast({ type: "state-update", players, projectiles });
-            } else {
-                if (players[myId]) conn.send({ type: "input", id: myId, x: players[myId].x, y: players[myId].y, angle: players[myId].angle });
+        if (bounced) {
+            p.bounces++;
+            // Remove after 1 ricochet
+            if (p.bounces > 1) {
+                projectiles.splice(i, 1);
+                continue;
             }
-
-            renderGraphics();
-            requestAnimationFrame(gameLoop);
         }
 
-        function processMovement() {
-            let me = players[myId];
-            if (!me || me.lives <= 0) return;
-
-            me.angle = Math.atan2(mouseY - me.y, mouseX - me.x);
-
-            let speed = 3.2;
-            let dx = 0, dy = 0;
-            if (keys['w'] || keys['arrowup']) dy = -1;
-            if (keys['s'] || keys['arrowdown']) dy = 1;
-            if (keys['a'] || keys['arrowleft']) dx = -1;
-            if (keys['d'] || keys['arrowright']) dx = 1;
-
-            if (dx !== 0 || dy !== 0) {
-                let len = Math.hypot(dx, dy);
-                me.x += (dx / len) * speed;
-                me.y += (dy / len) * speed;
-                me.x = Math.max(16, Math.min(canvas.width - 16, me.x));
-                me.y = Math.max(16, Math.min(canvas.height - 16, me.y));
+        // Player collisions
+        let hitPlayer = false;
+        Object.values(players).forEach(pl => {
+            if (pl.lives > 0 && pl.id !== p.ownerId) {
+                if (Math.hypot(pl.x - p.x, pl.y - p.y) < 20) {
+                    pl.lives--;
+                    hitPlayer = true;
+                }
             }
+        });
+
+        if (hitPlayer) {
+            projectiles.splice(i, 1);
+            continue;
         }
+    }
 
-        function processPhysics() {
-            // Move projectiles
-            for (let i = projectiles.length - 1; i >= 0; i--) {
-                let p = projectiles[i];
-                p.x += p.vx;
-                p.y += p.vy;
+    // Check Win Condition
+    let alivePlayers = Object.values(players).filter(p => p.lives > 0);
+    if (alivePlayers.length <= 1 && Object.keys(players).length > 1) {
+        let winnerName = alivePlayers.length === 1 ? alivePlayers[0].name : "NOBODY";
+        broadcast({ type: "end", winnerName });
+        triggerEndGame(winnerName);
+    }
+}
 
-                // Wall bounces
-                if (p.x <= 8 || p.x >= canvas.width - 8) p.vx *= -1;
-                if (p.y <= 8 || p.y >= canvas.height - 8) p.vy *= -1;
+function triggerEndGame(winnerName) {
+    gameRunning = false;
+    document.getElementById("win-title").innerText = `${winnerName} WINS!`;
+    gameOverOverlay.style.display = "flex";
+}
 
-                // Player collisions
-                Object.values(players).forEach(pl => {
-                    if (pl.lives > 0 && pl.id !== p.ownerId) {
-                        if (Math.hypot(pl.x - p.x, pl.y - p.y) < 20) {
-                            pl.lives--;
-                            projectiles.splice(i, 1);
-                        }
-                    }
-                });
-            }
+function renderGraphics() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Check Win Condition
-            let alivePlayers = Object.values(players).filter(p => p.lives > 0);
-            if (alivePlayers.length <= 1 && Object.keys(players).length > 1) {
-                let winnerName = alivePlayers.length === 1 ? alivePlayers[0].name : "NOBODY";
-                broadcast({ type: "end", winnerName });
-                triggerEndGame(winnerName);
-            }
-        }
+    // Render Projectiles (orbs that have ricocheted lose a bit of opacity)
+    projectiles.forEach(p => {
+        ctx.save();
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = p.bounces > 0 ? 0.6 : 1.0;
+        ctx.shadowBlur = p.bounces > 0 ? 6 : 12;
+        ctx.shadowColor = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    });
 
-        function triggerEndGame(winnerName) {
-            gameRunning = false;
-            document.getElementById("win-title").innerText = `${winnerName} WINS!`;
-            gameOverOverlay.style.display = "flex";
-        }
+    // Render Players
+    Object.values(players).forEach(p => {
+        if (p.lives <= 0) return;
 
-        function renderGraphics() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.save();
+        ctx.translate(p.x, p.y);
 
-            // Render Projectiles
-            projectiles.forEach(p => {
-                ctx.save();
-                ctx.fillStyle = p.color;
-                ctx.shadowBlur = 12;
-                ctx.shadowColor = p.color;
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.restore();
-            });
+        ctx.fillStyle = p.color;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = p.color;
+        ctx.beginPath();
+        ctx.arc(0, 0, 16, 0, Math.PI * 2);
+        ctx.fill();
 
-            // Render Players
-            Object.values(players).forEach(p => {
-                if (p.lives <= 0) return;
+        ctx.rotate(p.angle);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(10, -3, 10, 6);
 
-                ctx.save();
-                ctx.translate(p.x, p.y);
+        ctx.restore();
 
-                // Body
-                ctx.fillStyle = p.color;
-                ctx.shadowBlur = 15;
-                ctx.shadowColor = p.color;
-                ctx.beginPath();
-                ctx.arc(0, 0, 16, 0, Math.PI * 2);
-                ctx.fill();
-
-                // Aiming Pointer
-                ctx.rotate(p.angle);
-                ctx.fillStyle = "#ffffff";
-                ctx.fillRect(10, -3, 10, 6);
-
-                ctx.restore();
-
-                // Name & Shields Text
-                ctx.fillStyle = "#ffffff";
-                ctx.font = "11px sans-serif";
-                ctx.textAlign = "center";
-                ctx.fillText(`${p.name} [${p.lives}]`, p.x, p.y - 22);
-            });
-        }
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "11px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(`${p.name} [${p.lives}]`, p.x, p.y - 22);
+    });
+}
     </script>
 </body>
 </html>
