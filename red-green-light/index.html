@@ -111,321 +111,363 @@
 
     <script>
         const canvas = document.getElementById("gameCanvas");
-        const ctx = canvas.getContext("2d");
-        const lobby = document.getElementById("lobby");
-        const gameContainer = document.getElementById("game-container");
-        const playerListDiv = document.getElementById("player-list");
-        const statusMsg = document.getElementById("status-msg");
-        const btnStart = document.getElementById("btn-start");
-        const lightIndicator = document.getElementById("light-indicator");
-        const guardControls = document.getElementById("guard-controls");
-        const roleDisplay = document.getElementById("role-display");
-        const gameOverOverlay = document.getElementById("game-over-overlay");
+const ctx = canvas.getContext("2d");
+const lobby = document.getElementById("lobby");
+const gameContainer = document.getElementById("game-container");
+const playerListDiv = document.getElementById("player-list");
+const statusMsg = document.getElementById("status-msg");
+const btnStart = document.getElementById("btn-start");
+const lightIndicator = document.getElementById("light-indicator");
+const guardControls = document.getElementById("guard-controls");
+const roleDisplay = document.getElementById("role-display");
+const gameOverOverlay = document.getElementById("game-over-overlay");
 
-        let peer, conn, role = ""; 
-        let myId = "";
-        let myUsername = "";
-        let connections = []; 
-        let players = {};     
-        let gameRunning = false;
-        let keys = {};
-        
-        // Light State
-        let currentLight = "GREEN"; // "GREEN" or "RED"
-        let redLightStartTime = 0;
-        const GRACE_PERIOD_MS = 700; // 0.7 second leniency
+let peer, conn, role = ""; 
+let myId = "";
+let myUsername = "";
+let connections = []; 
+let players = {};     
+let gameRunning = false;
+let keys = {};
 
-        peer = new Peer(Math.random().toString(36).substring(2, 7).toUpperCase());
-        peer.on('open', id => { myId = id; statusMsg.innerText = "Network ready."; });
+// Light State
+let currentLight = "GREEN"; 
+let redLightStartTime = 0;
+const GRACE_PERIOD_MS = 700; 
 
-        document.getElementById("btn-create").addEventListener("click", () => {
-            if (!myId) return;
-            myUsername = document.getElementById("username-input").value.trim() || "Guard_" + Math.floor(Math.random()*100);
-            role = "guard";
-            document.getElementById("setup-inputs").style.display = "none";
-            document.getElementById("player-list-section").style.display = "block";
-            btnStart.style.display = "block";
-            statusMsg.innerHTML = `Room Code: <b style='color:#00f0ff; font-size:1.3rem;'>${myId}</b>`;
-            
-            players[myId] = { id: myId, name: myUsername, x: 740, y: 250, isGuard: true, alive: true, moving: false };
+peer = new Peer(Math.random().toString(36).substring(2, 7).toUpperCase());
+peer.on('open', id => { myId = id; statusMsg.innerText = "Network ready."; });
+
+document.getElementById("btn-create").addEventListener("click", () => {
+    if (!myId) return;
+    myUsername = document.getElementById("username-input").value.trim() || "Player_" + Math.floor(Math.random()*100);
+    role = "host";
+    document.getElementById("setup-inputs").style.display = "none";
+    document.getElementById("player-list-section").style.display = "block";
+    btnStart.style.display = "block";
+    statusMsg.innerHTML = `Room Code: <b style='color:#00f0ff; font-size:1.3rem;'>${myId}</b>`;
+    
+    players[myId] = { id: myId, name: myUsername, x: 50, y: 250, isGuard: false, alive: true, moving: false };
+    updateLobbyUI();
+
+    peer.on('connection', c => {
+        if (Object.keys(players).length >= 8 || gameRunning) { setTimeout(() => c.close(), 500); return; }
+        c.on('open', () => {
+            connections.push(c);
+            c.on('data', data => handleNetworkData(data, c));
+            c.send({ type: "sync", players });
+        });
+        c.on('close', () => {
+            connections = connections.filter(conn => conn !== c);
+            let leftId = Object.keys(players).find(k => players[k].peerId === c.peer);
+            if(leftId) { delete players[leftId]; broadcast({type: "sync", players}); updateLobbyUI(); }
+        });
+    });
+});
+
+document.getElementById("btn-join").addEventListener("click", () => {
+    let code = document.getElementById("room-code-input").value.trim().toUpperCase();
+    if(!code) return alert("Enter room code.");
+    myUsername = document.getElementById("username-input").value.trim() || "Player_" + Math.floor(Math.random()*100);
+    role = "guest";
+    statusMsg.innerText = "Connecting...";
+    
+    conn = peer.connect(code);
+    conn.on('open', () => {
+        conn.send({ type: "join", username: myUsername, id: myId });
+        document.getElementById("setup-inputs").style.display = "none";
+        document.getElementById("player-list-section").style.display = "block";
+    });
+    conn.on('data', data => handleNetworkData(data, conn));
+    conn.on('close', () => { alert("Host disconnected."); location.reload(); });
+});
+
+document.getElementById("btn-set-green").addEventListener("click", () => setLight("GREEN"));
+document.getElementById("btn-set-red").addEventListener("click", () => setLight("RED"));
+
+function setLight(state) {
+    if (!players[myId] || !players[myId].isGuard) return;
+    currentLight = state;
+    if (state === "RED") redLightStartTime = Date.now();
+    updateLightUI();
+    broadcast({ type: "light-change", light: currentLight, redStartTime: redLightStartTime });
+}
+
+canvas.addEventListener("mousedown", (e) => {
+    if (!gameRunning || !players[myId] || !players[myId].isGuard) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+
+    Object.values(players).forEach(p => {
+        if (!p.isGuard && p.alive) {
+            let dist = Math.hypot(p.x - clickX, p.y - clickY);
+            if (dist < 20) { 
+                let now = Date.now();
+                let timeSinceRed = now - redLightStartTime;
+
+                if (currentLight === "RED" && timeSinceRed > GRACE_PERIOD_MS && p.moving) {
+                    p.alive = false; 
+                    broadcast({ type: "player-eliminated", id: p.id });
+                }
+            }
+        }
+    });
+});
+
+btnStart.addEventListener("click", () => {
+    startNewRound();
+});
+
+function startNewRound() {
+    let pKeys = Object.keys(players);
+    let randomGuardId = pKeys[Math.floor(Math.random() * pKeys.length)];
+
+    let sneakers = [];
+    pKeys.forEach(k => {
+        players[k].isGuard = (k === randomGuardId);
+        players[k].alive = true;
+        players[k].moving = false;
+        if (!players[k].isGuard) sneakers.push(players[k]);
+    });
+
+    // Position the Guard
+    players[randomGuardId].x = 740;
+    players[randomGuardId].y = 250;
+
+    // Position Sneakers
+    sneakers.forEach((p, idx) => {
+        p.x = 50;
+        p.y = 80 + idx * (340 / Math.max(1, sneakers.length - 1));
+    });
+
+    currentLight = "GREEN";
+    broadcast({ type: "start", players });
+    beginMatch();
+}
+
+function returnToLobby() {
+    gameRunning = false;
+    gameOverOverlay.style.display = "none";
+    gameContainer.style.display = "none";
+    lobby.style.display = "block";
+    updateLobbyUI();
+}
+
+function handleNetworkData(data, c) {
+    if (role === "host") {
+        if (data.type === "join") {
+            players[data.id] = { id: data.id, name: data.username, x: 50, y: 100, isGuard: false, alive: true, moving: false, peerId: c.peer };
+            broadcast({ type: "sync", players });
             updateLobbyUI();
-
-            peer.on('connection', c => {
-                if (Object.keys(players).length >= 8 || gameRunning) { setTimeout(() => c.close(), 500); return; }
-                c.on('open', () => {
-                    connections.push(c);
-                    c.on('data', data => handleNetworkData(data, c));
-                    c.send({ type: "sync", players });
-                });
-                c.on('close', () => {
-                    connections = connections.filter(conn => conn !== c);
-                    let leftId = Object.keys(players).find(k => players[k].peerId === c.peer);
-                    if(leftId) { delete players[leftId]; broadcast({type: "sync", players}); updateLobbyUI(); }
-                });
-            });
-        });
-
-        document.getElementById("btn-join").addEventListener("click", () => {
-            let code = document.getElementById("room-code-input").value.trim().toUpperCase();
-            if(!code) return alert("Enter room code.");
-            myUsername = document.getElementById("username-input").value.trim() || "Sneaker_" + Math.floor(Math.random()*100);
-            role = "sneaker";
-            statusMsg.innerText = "Connecting...";
-            
-            conn = peer.connect(code);
-            conn.on('open', () => {
-                conn.send({ type: "join", username: myUsername, id: myId });
-                document.getElementById("setup-inputs").style.display = "none";
-                document.getElementById("player-list-section").style.display = "block";
-            });
-            conn.on('data', data => handleNetworkData(data, conn));
-            conn.on('close', () => { alert("Host disconnected."); location.reload(); });
-        });
-
-        // Guard Light Toggle Buttons (Only active on host/guard)
-        document.getElementById("btn-set-green").addEventListener("click", () => setLight("GREEN"));
-        document.getElementById("btn-set-red").addEventListener("click", () => setLight("RED"));
-
-        function setLight(state) {
-            if (role !== "guard") return;
-            currentLight = state;
-            if (state === "RED") redLightStartTime = Date.now();
+        }
+        if (data.type === "input") {
+            if (players[data.id] && players[data.id].alive) {
+                players[data.id].x = data.x;
+                players[data.id].y = data.y;
+                players[data.id].moving = data.moving;
+            }
+        }
+        if (data.type === "request-lobby") {
+            returnToLobby();
+            broadcast({ type: "return-to-lobby" });
+        }
+    } else {
+        if (data.type === "sync") { players = data.players; updateLobbyUI(); }
+        if (data.type === "start") { players = data.players; beginMatch(); }
+        if (data.type === "return-to-lobby") { returnToLobby(); }
+        if (data.type === "light-change") {
+            currentLight = data.light;
+            redLightStartTime = data.redStartTime;
             updateLightUI();
-            broadcast({ type: "light-change", light: currentLight, redStartTime: redLightStartTime });
         }
-
-        // Click mechanics for the Guard to target Sneakers
-        canvas.addEventListener("mousedown", (e) => {
-            if (!gameRunning || role !== "guard") return;
-            
-            const rect = canvas.getBoundingClientRect();
-            const clickX = e.clientX - rect.left;
-            const clickY = e.clientY - rect.top;
-
-            // Guard clicks on a Sneaker to challenge them
-            Object.values(players).forEach(p => {
-                if (!p.isGuard && p.alive) {
-                    let dist = Math.hypot(p.x - clickX, p.y - clickY);
-                    if (dist < 20) { // Clicked on player circle
-                        let now = Date.now();
-                        let timeSinceRed = now - redLightStartTime;
-
-                        // Check if challenged player was actually moving AFTER the 0.7s leniency period
-                        if (currentLight === "RED" && timeSinceRed > GRACE_PERIOD_MS && p.moving) {
-                            p.alive = false; // Player is eliminated
-                            broadcast({ type: "player-eliminated", id: p.id });
-                        }
-                    }
+        if (data.type === "state-update") {
+            Object.keys(data.players).forEach(k => {
+                if (k !== myId) {
+                    players[k].x = data.players[k].x;
+                    players[k].y = data.players[k].y;
+                    players[k].moving = data.players[k].moving;
                 }
+                players[k].alive = data.players[k].alive;
             });
-        });
+        }
+        if (data.type === "player-eliminated") {
+            if (players[data.id]) players[data.id].alive = false;
+        }
+        if (data.type === "end") { triggerEndGame(data.winnerName); }
+    }
+}
 
-        btnStart.addEventListener("click", () => {
-            let sneakers = Object.values(players).filter(p => !p.isGuard);
-            sneakers.forEach((p, idx) => {
-                p.x = 50;
-                p.y = 80 + idx * (340 / Math.max(1, sneakers.length - 1));
-                p.alive = true;
-                p.moving = false;
+function broadcast(msg) { connections.forEach(c => c.send(msg)); }
+
+function updateLobbyUI() {
+    let count = Object.keys(players).length;
+    document.getElementById("count").innerText = count;
+    playerListDiv.innerHTML = Object.keys(players).map(k => `<div>• ${players[k].name} ${k === myId ? '<span style="color:#888;">(You)</span>' : ''}</div>`).join('');
+    if (role === "host") btnStart.disabled = (count < 2);
+}
+
+function updateLightUI() {
+    if (currentLight === "GREEN") {
+        lightIndicator.innerText = "GREEN LIGHT";
+        lightIndicator.className = "light-green";
+    } else {
+        lightIndicator.innerText = "RED LIGHT";
+        lightIndicator.className = "light-red";
+    }
+}
+
+function beginMatch() {
+    lobby.style.display = "none";
+    gameOverOverlay.style.display = "none";
+    gameContainer.style.display = "block";
+    gameRunning = true;
+    
+    let isMeGuard = players[myId] && players[myId].isGuard;
+    if (isMeGuard) {
+        guardControls.style.display = "block";
+        roleDisplay.innerText = "ROLE: GUARD (Click moving players on Red Light)";
+    } else {
+        guardControls.style.display = "none";
+        roleDisplay.innerText = "ROLE: SNEAKER (Reach the far side!)";
+    }
+
+    updateLightUI();
+
+    if (!window.listenersSetup) {
+        window.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; });
+        window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
+        window.listenersSetup = true;
+    }
+    requestAnimationFrame(gameLoop);
+}
+
+function gameLoop() {
+    if (!gameRunning) return;
+    
+    processMovement();
+    
+    if (role === "host") {
+        processRules();
+        broadcast({ type: "state-update", players });
+    } else {
+        if (players[myId]) {
+            conn.send({ 
+                type: "input", 
+                id: myId, 
+                x: players[myId].x, 
+                y: players[myId].y, 
+                moving: players[myId].moving 
             });
-            broadcast({ type: "start", players });
-            beginMatch();
-        });
-
-        function handleNetworkData(data, c) {
-            if (role === "guard") {
-                if (data.type === "join") {
-                    players[data.id] = { id: data.id, name: data.username, x: 50, y: 100, isGuard: false, alive: true, moving: false, peerId: c.peer };
-                    broadcast({ type: "sync", players });
-                    updateLobbyUI();
-                }
-                if (data.type === "input") {
-                    if (players[data.id] && players[data.id].alive) {
-                        players[data.id].x = data.x;
-                        players[data.id].y = data.y;
-                        players[data.id].moving = data.moving;
-                    }
-                }
-            } else {
-                if (data.type === "sync") { players = data.players; updateLobbyUI(); }
-                if (data.type === "start") { players = data.players; beginMatch(); }
-                if (data.type === "light-change") {
-                    currentLight = data.light;
-                    redLightStartTime = data.redStartTime;
-                    updateLightUI();
-                }
-                if (data.type === "state-update") {
-                    Object.keys(data.players).forEach(k => {
-                        if (k !== myId) {
-                            players[k].x = data.players[k].x;
-                            players[k].y = data.players[k].y;
-                            players[k].moving = data.players[k].moving;
-                        }
-                        players[k].alive = data.players[k].alive;
-                    });
-                }
-                if (data.type === "player-eliminated") {
-                    if (players[data.id]) players[data.id].alive = false;
-                }
-                if (data.type === "end") { triggerEndGame(data.winnerName); }
-            }
         }
+    }
 
-        function broadcast(msg) { connections.forEach(c => c.send(msg)); }
+    renderGraphics();
+    requestAnimationFrame(gameLoop);
+}
 
-        function updateLobbyUI() {
-            let count = Object.keys(players).length;
-            document.getElementById("count").innerText = count;
-            playerListDiv.innerHTML = Object.keys(players).map(k => `<div>• ${players[k].name} ${players[k].isGuard ? '<b style="color:#ff0055;">(Guard)</b>' : ''} ${k === myId ? '<span style="color:#888;">(You)</span>' : ''}</div>`).join('');
-            if (role === "guard") btnStart.disabled = (count < 2);
+function processMovement() {
+    let me = players[myId];
+    if (!me || me.isGuard || !me.alive) return;
+
+    let speed = 2.2;
+    let dx = 0, dy = 0;
+    if (keys['w'] || keys['arrowup']) dy = -1;
+    if (keys['s'] || keys['arrowdown']) dy = 1;
+    if (keys['a'] || keys['arrowleft']) dx = -1;
+    if (keys['d'] || keys['arrowright']) dx = 1;
+
+    me.moving = (dx !== 0 || dy !== 0);
+
+    if (me.moving) {
+        let len = Math.hypot(dx, dy);
+        me.x += (dx / len) * speed;
+        me.y += (dy / len) * speed;
+        me.x = Math.max(20, Math.min(canvas.width - 20, me.x));
+        me.y = Math.max(20, Math.min(canvas.height - 20, me.y));
+    }
+}
+
+function processRules() {
+    Object.values(players).forEach(p => {
+        if (!p.isGuard && p.alive && p.x >= 700) {
+            broadcast({ type: "end", winnerName: p.name });
+            triggerEndGame(p.name);
         }
+    });
 
-        function updateLightUI() {
-            if (currentLight === "GREEN") {
-                lightIndicator.innerText = "GREEN LIGHT";
-                lightIndicator.className = "light-green";
-            } else {
-                lightIndicator.innerText = "RED LIGHT";
-                lightIndicator.className = "light-red";
-            }
+    let aliveSneakers = Object.values(players).filter(p => !p.isGuard && p.alive);
+    if (aliveSneakers.length === 0 && Object.keys(players).length > 1) {
+        let guardObj = Object.values(players).find(p => p.isGuard);
+        let guardName = guardObj ? guardObj.name : "GUARD";
+        broadcast({ type: "end", winnerName: guardName });
+        triggerEndGame(guardName);
+    }
+}
+
+function triggerEndGame(winnerName) {
+    gameRunning = false;
+    document.getElementById("win-title").innerText = `${winnerName} WINS!`;
+    
+    let btnBox = gameOverOverlay.querySelector("div");
+    btnBox.innerHTML = `
+        <button class="btn" id="btn-return-lobby" style="background-color:#38b000; color:#fff;">Return to Lobby</button>
+        <button class="btn" onclick="location.reload()" style="background-color:#ef4444; color:#fff;">Leave</button>
+    `;
+    
+    document.getElementById("btn-return-lobby").addEventListener("click", () => {
+        if (role === "host") {
+            returnToLobby();
+            broadcast({ type: "return-to-lobby" });
+        } else {
+            conn.send({ type: "request-lobby" });
         }
+    });
 
-        function beginMatch() {
-            lobby.style.display = "none";
-            gameOverOverlay.style.display = "none";
-            gameContainer.style.display = "block";
-            gameRunning = true;
-            
-            if (role === "guard") {
-                guardControls.style.display = "block";
-                roleDisplay.innerText = "ROLE: GUARD (Click moving players on Red Light)";
-            } else {
-                guardControls.style.display = "none";
-                roleDisplay.innerText = "ROLE: SNEAKER (Reach the far side!)";
-            }
+    gameOverOverlay.style.display = "flex";
+}
 
-            if (!window.listenersSetup) {
-                window.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; });
-                window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
-                window.listenersSetup = true;
-            }
-            requestAnimationFrame(gameLoop);
-        }
+function renderGraphics() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        function gameLoop() {
-            if (!gameRunning) return;
-            
-            processMovement();
-            
-            if (role === "guard") {
-                processRules();
-                broadcast({ type: "state-update", players });
-            } else {
-                if (players[myId]) {
-                    conn.send({ 
-                        type: "input", 
-                        id: myId, 
-                        x: players[myId].x, 
-                        y: players[myId].y, 
-                        moving: players[myId].moving 
-                    });
-                }
-            }
+    ctx.strokeStyle = "#ff0055";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(700, 0);
+    ctx.lineTo(700, canvas.height);
+    ctx.stroke();
 
-            renderGraphics();
-            requestAnimationFrame(gameLoop);
-        }
+    Object.values(players).forEach(p => {
+        if (!p.alive) return;
 
-        function processMovement() {
-            let me = players[myId];
-            if (!me || me.isGuard || !me.alive) return;
+        ctx.save();
+        ctx.translate(p.x, p.y);
 
-            let speed = 2.2;
-            let dx = 0, dy = 0;
-            if (keys['w'] || keys['arrowup']) dy = -1;
-            if (keys['s'] || keys['arrowdown']) dy = 1;
-            if (keys['a'] || keys['arrowleft']) dx = -1;
-            if (keys['d'] || keys['arrowright']) dx = 1;
-
-            me.moving = (dx !== 0 || dy !== 0);
-
-            if (me.moving) {
-                let len = Math.hypot(dx, dy);
-                me.x += (dx / len) * speed;
-                me.y += (dy / len) * speed;
-                me.x = Math.max(20, Math.min(canvas.width - 20, me.x));
-                me.y = Math.max(20, Math.min(canvas.height - 20, me.y));
-            }
-        }
-
-        function processRules() {
-            // Check win condition: Any sneaker reaching the guard line (X >= 700)
-            Object.values(players).forEach(p => {
-                if (!p.isGuard && p.alive && p.x >= 700) {
-                    broadcast({ type: "end", winnerName: p.name });
-                    triggerEndGame(p.name);
-                }
-            });
-
-            // Check if all sneakers are eliminated
-            let aliveSneakers = Object.values(players).filter(p => !p.isGuard && p.alive);
-            if (aliveSneakers.length === 0 && Object.keys(players).length > 1) {
-                broadcast({ type: "end", winnerName: "GUARD" });
-                triggerEndGame("GUARD");
-            }
-        }
-
-        function triggerEndGame(winnerName) {
-            gameRunning = false;
-            document.getElementById("win-title").innerText = `${winnerName} WINS!`;
-            gameOverOverlay.style.display = "flex";
-        }
-
-        function renderGraphics() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // Draw Finish / Guard Line
-            ctx.strokeStyle = "#ff0055";
-            ctx.lineWidth = 4;
+        if (p.isGuard) {
+            ctx.fillStyle = "#ff0055";
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = "#ff0055";
             ctx.beginPath();
-            ctx.moveTo(700, 0);
-            ctx.lineTo(700, canvas.height);
-            ctx.stroke();
-
-            // Render Players
-            Object.values(players).forEach(p => {
-                if (!p.alive) return;
-
-                ctx.save();
-                ctx.translate(p.x, p.y);
-
-                // Guard rendering
-                if (p.isGuard) {
-                    ctx.fillStyle = "#ff0055";
-                    ctx.shadowBlur = 15;
-                    ctx.shadowColor = "#ff0055";
-                    ctx.beginPath();
-                    ctx.arc(0, 0, 18, 0, Math.PI * 2);
-                    ctx.fill();
-                } else {
-                    // Sneaker rendering
-                    ctx.fillStyle = "#00f0ff";
-                    ctx.shadowBlur = p.moving ? 10 : 0;
-                    ctx.shadowColor = "#00f0ff";
-                    ctx.beginPath();
-                    ctx.arc(0, 0, 14, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-
-                ctx.restore();
-
-                // Name tag
-                ctx.fillStyle = "#ffffff";
-                ctx.font = "11px sans-serif";
-                ctx.textAlign = "center";
-                ctx.fillText(p.name, p.x, p.y - 22);
-            });
+            ctx.arc(0, 0, 18, 0, Math.PI * 2);
+            ctx.fill();
+        } else {
+            ctx.fillStyle = "#00f0ff";
+            ctx.shadowBlur = p.moving ? 10 : 0;
+            ctx.shadowColor = "#00f0ff";
+            ctx.beginPath();
+            ctx.arc(0, 0, 14, 0, Math.PI * 2);
+            ctx.fill();
         }
+
+        ctx.restore();
+
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "11px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(p.name, p.x, p.y - 22);
+    });
+}
     </script>
 </body>
 </html>
