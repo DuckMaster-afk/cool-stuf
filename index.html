@@ -1,342 +1,148 @@
-const colorPalette = ["#00f0ff", "#ff007f", "#39ff14", "#ffe600", "#ff6600", "#b066ff"];
-
-const canvas = document.getElementById("gameCanvas");
-const ctx = canvas.getContext("2d");
-const lobby = document.getElementById("lobby");
-const gameContainer = document.getElementById("game-container");
-const playerListDiv = document.getElementById("player-list");
-const statusMsg = document.getElementById("status-msg");
-const btnStart = document.getElementById("btn-start");
-const gameOverOverlay = document.getElementById("game-over-overlay");
-
-let peer, conn, role = ""; 
-let myId = "";
-let myUsername = "";
-let connections = []; 
-let players = {};     
-let projectiles = [];
-let gameRunning = false;
-let keys = {};
-let mouseX = 0, mouseY = 0;
-let lastShotTime = 0;
-
-peer = new Peer(Math.random().toString(36).substring(2, 7).toUpperCase());
-peer.on('open', id => { myId = id; statusMsg.innerText = "Network ready."; });
-
-document.getElementById("btn-create").addEventListener("click", () => {
-    if (!myId) return;
-    myUsername = document.getElementById("username-input").value.trim() || "Slinger_" + Math.floor(Math.random()*100);
-    role = "host";
-    document.getElementById("setup-inputs").style.display = "none";
-    document.getElementById("player-list-section").style.display = "block";
-    btnStart.style.display = "block";
-    statusMsg.innerHTML = `Room Code: <b style='color:#00f0ff; font-size:1.3rem;'>${myId}</b>`;
-    
-    players[myId] = { id: myId, name: myUsername, x: 100, y: 250, angle: 0, lives: 3, color: colorPalette[0] };
-    updateLobbyUI();
-
-    peer.on('connection', c => {
-        if (Object.keys(players).length >= 8 || gameRunning) { setTimeout(() => c.close(), 500); return; }
-        c.on('open', () => {
-            connections.push(c);
-            c.on('data', data => handleNetworkData(data, c));
-            c.send({ type: "sync", players });
-        });
-        c.on('close', () => {
-            connections = connections.filter(conn => conn !== c);
-            let leftId = Object.keys(players).find(k => players[k].peerId === c.peer);
-            if(leftId) { delete players[leftId]; broadcast({type: "sync", players}); updateLobbyUI(); }
-        });
-    });
-});
-
-document.getElementById("btn-join").addEventListener("click", () => {
-    let code = document.getElementById("room-code-input").value.trim().toUpperCase();
-    if(!code) return alert("Enter room code.");
-    myUsername = document.getElementById("username-input").value.trim() || "Slinger_" + Math.floor(Math.random()*100);
-    role = "guest";
-    statusMsg.innerText = "Connecting...";
-    
-    conn = peer.connect(code);
-    conn.on('open', () => {
-        conn.send({ type: "join", username: myUsername, id: myId });
-        document.getElementById("setup-inputs").style.display = "none";
-        document.getElementById("player-list-section").style.display = "block";
-    });
-    conn.on('data', data => handleNetworkData(data, conn));
-    conn.on('close', () => { alert("Host disconnected."); location.reload(); });
-});
-
-canvas.addEventListener("mousemove", (e) => {
-    const rect = canvas.getBoundingClientRect();
-    mouseX = e.clientX - rect.left;
-    mouseY = e.clientY - rect.top;
-});
-
-canvas.addEventListener("mousedown", () => {
-    if (!gameRunning) return;
-    let me = players[myId];
-    if (!me || me.lives <= 0) return;
-
-    let now = Date.now();
-    if (now - lastShotTime > 400) { 
-        lastShotTime = now;
-        let shotData = {
-            x: me.x + Math.cos(me.angle) * 20,
-            y: me.y + Math.sin(me.angle) * 20,
-            vx: Math.cos(me.angle) * 8,
-            vy: Math.sin(me.angle) * 8,
-            ownerId: myId,
-            color: me.color,
-            bounces: 0 // Track total wall bounces
-        };
-        
-        if (role === "host") {
-            projectiles.push({ ...shotData, id: Math.random() });
-        } else {
-            conn.send({ type: "shoot", shot: shotData });
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Arcade Home</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
         }
-    }
-});
-
-btnStart.addEventListener("click", () => {
-    let keysArray = Object.keys(players);
-    keysArray.forEach((k, index) => {
-        players[k].lives = 3;
-        players[k].color = colorPalette[index % colorPalette.length];
-        players[k].x = 150 + (index * 220) % 600;
-        players[k].y = 120 + Math.floor(index / 3) * 180;
-    });
-    projectiles = [];
-    broadcast({ type: "start", players });
-    beginMatch();
-});
-
-document.getElementById("btn-rematch").addEventListener("click", () => {
-    if (role === "host") {
-        returnToLobby();
-        broadcast({ type: "return-to-lobby" });
-    } else {
-        conn.send({ type: "request-lobby" });
-    }
-});
-
-function returnToLobby() {
-    gameRunning = false;
-    gameOverOverlay.style.display = "none";
-    gameContainer.style.display = "none";
-    lobby.style.display = "block";
-    updateLobbyUI();
-}
-
-function handleNetworkData(data, c) {
-    if (role === "host") {
-        if (data.type === "join") {
-            players[data.id] = { id: data.id, name: data.username, x: 0, y: 0, angle: 0, lives: 3, color: colorPalette[Object.keys(players).length % colorPalette.length], peerId: c.peer };
-            broadcast({ type: "sync", players });
-            updateLobbyUI();
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
         }
-        if (data.type === "input") {
-            if(players[data.id] && players[data.id].lives > 0) {
-                players[data.id].x = data.x; players[data.id].y = data.y; players[data.id].angle = data.angle;
-            }
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            color: #f4d068;
         }
-        if (data.type === "shoot") {
-            projectiles.push({ ...data.shot, id: Math.random() });
+        p {
+            color: #aaa;
+            margin-bottom: 40px;
         }
-        if (data.type === "request-lobby") {
-            returnToLobby();
-            broadcast({ type: "return-to-lobby" });
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 25px;
+            max-width: 900px;
+            width: 100%;
         }
-    } else {
-        if (data.type === "sync") { players = data.players; updateLobbyUI(); }
-        if (data.type === "start") { players = data.players; beginMatch(); }
-        if (data.type === "return-to-lobby") { returnToLobby(); }
-        if (data.type === "state-update") { 
-            Object.keys(data.players).forEach(k => {
-                if(k !== myId) {
-                    players[k].x = data.players[k].x; 
-                    players[k].y = data.players[k].y; 
-                    players[k].angle = data.players[k].angle; 
-                }
-                players[k].lives = data.players[k].lives;
-            });
-            projectiles = data.projectiles;
-            updateUIBar();
+        .card {
+            background-color: #262626;
+            border: 2px solid #333;
+            border-radius: 12px;
+            padding: 40px 20px;
+            text-align: center;
+            text-decoration: none;
+            color: #fff;
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
         }
-        if (data.type === "end") { triggerEndGame(data.winnerName); }
-    }
-}
-
-function broadcast(msg) { connections.forEach(c => c.send(msg)); }
-
-function updateLobbyUI() {
-    let count = Object.keys(players).length;
-    document.getElementById("count").innerText = count;
-    playerListDiv.innerHTML = Object.keys(players).map(k => `<div>• ${players[k].name} ${k === myId ? '<span style="color:#888;">(You)</span>' : ''}</div>`).join('');
-    if (role === "host") btnStart.disabled = (count < 2);
-}
-
-function beginMatch() {
-    lobby.style.display = "none";
-    gameOverOverlay.style.display = "none";
-    gameContainer.style.display = "block";
-    gameRunning = true;
-    
-    if(!window.listenersSetup) {
-        window.addEventListener("keydown", e => { keys[e.key.toLowerCase()] = true; });
-        window.addEventListener("keyup", e => { keys[e.key.toLowerCase()] = false; });
-        window.listenersSetup = true;
-    }
-    updateUIBar();
-    requestAnimationFrame(gameLoop);
-}
-
-function updateUIBar() {
-    let me = players[myId];
-    if(me) document.getElementById("lives-display").innerText = `SHIELDS: ${Math.max(0, me.lives)}`;
-    let aliveCount = Object.values(players).filter(p => p.lives > 0).length;
-    document.getElementById("players-alive-display").innerText = `PLAYERS ALIVE: ${aliveCount}`;
-}
-
-function gameLoop() {
-    if (!gameRunning) return;
-    processMovement();
-    
-    if (role === "host") {
-        processPhysics();
-        broadcast({ type: "state-update", players, projectiles });
-    } else {
-        if (players[myId]) conn.send({ type: "input", id: myId, x: players[myId].x, y: players[myId].y, angle: players[myId].angle });
-    }
-
-    renderGraphics();
-    requestAnimationFrame(gameLoop);
-}
-
-function processMovement() {
-    let me = players[myId];
-    if (!me || me.lives <= 0) return;
-
-    me.angle = Math.atan2(mouseY - me.y, mouseX - me.x);
-
-    let speed = 3.2;
-    let dx = 0, dy = 0;
-    if (keys['w'] || keys['arrowup']) dy = -1;
-    if (keys['s'] || keys['arrowdown']) dy = 1;
-    if (keys['a'] || keys['arrowleft']) dx = -1;
-    if (keys['d'] || keys['arrowright']) dx = 1;
-
-    if (dx !== 0 || dy !== 0) {
-        let len = Math.hypot(dx, dy);
-        me.x += (dx / len) * speed;
-        me.y += (dy / len) * speed;
-        me.x = Math.max(16, Math.min(canvas.width - 16, me.x));
-        me.y = Math.max(16, Math.min(canvas.height - 16, me.y));
-    }
-}
-
-function processPhysics() {
-    for (let i = projectiles.length - 1; i >= 0; i--) {
-        let p = projectiles[i];
-        p.x += p.vx;
-        p.y += p.vy;
-
-        let bounced = false;
-
-        // Check horizontal wall collision
-        if (p.x <= 8 || p.x >= canvas.width - 8) {
-            p.vx *= -1;
-            p.x = p.x <= 8 ? 9 : canvas.width - 9;
-            bounced = true;
+        .card:hover {
+            transform: translateY(-5px);
+            border-color: #f4d068;
+            box-shadow: 0 10px 20px rgba(244, 208, 104, 0.15);
         }
-        // Check vertical wall collision
-        if (p.y <= 8 || p.y >= canvas.height - 8) {
-            p.vy *= -1;
-            p.y = p.y <= 8 ? 9 : canvas.height - 9;
-            bounced = true;
+        .icon {
+            font-size: 3rem;
+            margin-bottom: 15px;
         }
-
-        if (bounced) {
-            p.bounces++;
-            // Remove after 1 ricochet
-            if (p.bounces > 1) {
-                projectiles.splice(i, 1);
-                continue;
-            }
+        .card h3 {
+            font-size: 1.3rem;
+            margin-bottom: 5px;
         }
-
-        // Player collisions
-        let hitPlayer = false;
-        Object.values(players).forEach(pl => {
-            if (pl.lives > 0 && pl.id !== p.ownerId) {
-                if (Math.hypot(pl.x - p.x, pl.y - p.y) < 20) {
-                    pl.lives--;
-                    hitPlayer = true;
-                }
-            }
-        });
-
-        if (hitPlayer) {
-            projectiles.splice(i, 1);
-            continue;
+        .placeholder {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
-    }
+        .placeholder:hover {
+            transform: none;
+            border-color: #333;
+            box-shadow: none;
+        }
+    </style>
+</head>
+<body>
 
-    // Check Win Condition
-    let alivePlayers = Object.values(players).filter(p => p.lives > 0);
-    if (alivePlayers.length <= 1 && Object.keys(players).length > 1) {
-        let winnerName = alivePlayers.length === 1 ? alivePlayers[0].name : "NOBODY";
-        broadcast({ type: "end", winnerName });
-        triggerEndGame(winnerName);
-    }
-}
+    <h1>Arcade Dashboard</h1>
+    <p>Select a zone to start playing locally.</p>
 
-function triggerEndGame(winnerName) {
-    gameRunning = false;
-    document.getElementById("win-title").innerText = `${winnerName} WINS!`;
-    gameOverOverlay.style.display = "flex";
-}
+    <h2 style="color: #f4d068; margin-top: 20px; margin-bottom: 15px; width: 100%; max-width: 900px; text-align: left;">🕹️ Retro Zone</h2>
+    <div class="grid" style="margin-bottom: 40px;">
+        <a href="snake/" class="card">
+            <div class="icon">🐍</div>
+            <h3>Retro Snake</h3>
+        </a>
+        <a href="breakout/" class="card">
+            <div class="icon">🚀</div>
+            <h3>Brick Breaker</h3>
+        </a>
+        <a href="flappy/" class="card">
+            <div class="icon">🧩</div>
+            <h3>Flappy Bird</h3>
+        </a>
+    </div>
 
-function renderGraphics() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+            <h2 style="color: #00adb5; margin-top: 20px; margin-bottom: 15px; width: 100%; max-width: 900px; text-align: left;">✨ Modern Zone</h2>
+    <div class="grid">
+        <a href="neon-shooter/" class="card" style="border-color: #00adb5; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #00adb5;">☄️</div>
+            <h3 style="color: #00adb5;">Neon Shooter</h3>
+        </a>
 
-    // Render Projectiles (orbs that have ricocheted lose a bit of opacity)
-    projectiles.forEach(p => {
-        ctx.save();
-        ctx.fillStyle = p.color;
-        ctx.globalAlpha = p.bounces > 0 ? 0.6 : 1.0;
-        ctx.shadowBlur = p.bounces > 0 ? 6 : 12;
-        ctx.shadowColor = p.color;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-    });
+        <a href="neon-drift/" class="card" style="border-color: #00adb5; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #00adb5;">🏎️</div>
+            <h3 style="color: #00adb5;">Neon Drift</h3>
+        </a>
 
-    // Render Players
-    Object.values(players).forEach(p => {
-        if (p.lives <= 0) return;
+        <a href="cyber-pong/" class="card" style="border-color: #00adb5; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #00adb5;">🏓</div>
+            <h3 style="color: #00adb5;">Cyber Pong</h3>
+        </a>
+	<a href="grid-drop/" class="card" style="border-color: #00adb5; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #00adb5;">🧱</div>
+            <h3 style="color: #00adb5;">Grid Drop</h3>
+        </a>
+    </div>
 
-        ctx.save();
-        ctx.translate(p.x, p.y);
+	<h2 style="color: #9d4edd; margin-top: 30px; margin-bottom: 15px; width: 100%; max-width: 900px; text-align: left;">👥 2-Player Zone</h2>
+    <div class="grid">
+        <a href="cyber-pong-2p/" class="card" style="border-color: #9d4edd; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #9d4edd;">🏓</div>
+            <h3 style="color: #9d4edd;">Cyber Pong 2P</h3>
+        </a>
 
-        ctx.fillStyle = p.color;
-        ctx.shadowBlur = 15;
-        ctx.shadowColor = p.color;
-        ctx.beginPath();
-        ctx.arc(0, 0, 16, 0, Math.PI * 2);
-        ctx.fill();
+        <a href="neon-tanks/" class="card" style="border-color: #9d4edd; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #9d4edd;">🛡️</div>
+            <h3 style="color: #9d4edd;">Neon Tanks 2P</h3>
+        </a>
+	<a href="neon-tanks-online/" class="card" style="border-color: #9d4edd; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #9d4edd;">🛡️</div>
+            <h3 style="color: #9d4edd;">Neon Tanks Online</h3>
+        </a>
+	<a href="neon-3player/" class="card" style="border-color: #9d4edd; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #9d4edd;">🛡️</div>
+            <h3 style="color: #9d4edd;">Neon Tanks 3P(Online)</h3>
+        </a>
+		<a href="online-hide-seek/" class="card" style="border-color: #9d4edd; background: linear-gradient(145deg, #1e1e1e, #111);">
+            <div class="icon" style="text-shadow: 0 0 10px #9d4edd;">🔦</div>
+            <h3 style="color: #9d4edd;">Hide and Seek(up to 8 players)</h3>
+        </a>
 
-        ctx.rotate(p.angle);
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(10, -3, 10, 6);
+    </div>
 
-        ctx.restore();
-
-        ctx.fillStyle = "#ffffff";
-        ctx.font = "11px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(`${p.name} [${p.lives}]`, p.x, p.y - 22);
-    });
-}
+</body>
+</html>
