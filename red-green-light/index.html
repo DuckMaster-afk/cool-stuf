@@ -130,10 +130,12 @@ let players = {};
 let gameRunning = false;
 let keys = {};
 
-// Light State
+// Light State & Timing
 let currentLight = "GREEN"; 
 let redLightStartTime = 0;
+let lastLightSwitchTime = 0;
 const GRACE_PERIOD_MS = 700; 
+const LIGHT_COOLDOWN_MS = 1000; // 1 second cooldown for guard toggles
 
 peer = new Peer(Math.random().toString(36).substring(2, 7).toUpperCase());
 peer.on('open', id => { myId = id; statusMsg.innerText = "Network ready."; });
@@ -147,7 +149,7 @@ document.getElementById("btn-create").addEventListener("click", () => {
     btnStart.style.display = "block";
     statusMsg.innerHTML = `Room Code: <b style='color:#00f0ff; font-size:1.3rem;'>${myId}</b>`;
     
-    players[myId] = { id: myId, name: myUsername, x: 50, y: 250, isGuard: false, alive: true, moving: false };
+    players[myId] = { id: myId, name: myUsername, x: 50, y: 250, isGuard: false, score: 0, moving: false, caughtDuringRed: false };
     updateLobbyUI();
 
     peer.on('connection', c => {
@@ -187,8 +189,22 @@ document.getElementById("btn-set-red").addEventListener("click", () => setLight(
 
 function setLight(state) {
     if (!players[myId] || !players[myId].isGuard) return;
+    if (state === currentLight) return;
+
+    let now = Date.now();
+    // Enforce 1-second cooldown between light changes
+    if (now - lastLightSwitchTime < LIGHT_COOLDOWN_MS) return;
+
+    lastLightSwitchTime = now;
     currentLight = state;
-    if (state === "RED") redLightStartTime = Date.now();
+
+    if (state === "RED") {
+        redLightStartTime = now;
+    } else {
+        // Reset all caught flags when switching back to Green Light
+        Object.values(players).forEach(p => p.caughtDuringRed = false);
+    }
+
     updateLightUI();
     broadcast({ type: "light-change", light: currentLight, redStartTime: redLightStartTime });
 }
@@ -201,15 +217,15 @@ canvas.addEventListener("mousedown", (e) => {
     const clickY = e.clientY - rect.top;
 
     Object.values(players).forEach(p => {
-        if (!p.isGuard && p.alive) {
+        if (!p.isGuard) {
             let dist = Math.hypot(p.x - clickX, p.y - clickY);
             if (dist < 20) { 
-                let now = Date.now();
-                let timeSinceRed = now - redLightStartTime;
-
-                if (currentLight === "RED" && timeSinceRed > GRACE_PERIOD_MS && p.moving) {
-                    p.alive = false; 
-                    broadcast({ type: "player-eliminated", id: p.id });
+                // Guard can tag any player who moved during this Red Light phase
+                if (currentLight === "RED" && p.caughtDuringRed) {
+                    // Send caught player back to the start line
+                    p.x = 50;
+                    p.caughtDuringRed = false;
+                    broadcast({ type: "player-reset", id: p.id, x: 50 });
                 }
             }
         }
@@ -217,32 +233,35 @@ canvas.addEventListener("mousedown", (e) => {
 });
 
 btnStart.addEventListener("click", () => {
-    startNewRound();
+    if (role === "host") startNewRound();
 });
 
 function startNewRound() {
     let pKeys = Object.keys(players);
+    // Pick a random Guard for every match
     let randomGuardId = pKeys[Math.floor(Math.random() * pKeys.length)];
 
     let sneakers = [];
     pKeys.forEach(k => {
         players[k].isGuard = (k === randomGuardId);
-        players[k].alive = true;
+        players[k].score = 0;
         players[k].moving = false;
+        players[k].caughtDuringRed = false;
         if (!players[k].isGuard) sneakers.push(players[k]);
     });
 
-    // Position the Guard
+    // Guard Position
     players[randomGuardId].x = 740;
     players[randomGuardId].y = 250;
 
-    // Position Sneakers
+    // Sneakers Position
     sneakers.forEach((p, idx) => {
         p.x = 50;
         p.y = 80 + idx * (340 / Math.max(1, sneakers.length - 1));
     });
 
     currentLight = "GREEN";
+    lastLightSwitchTime = 0;
     broadcast({ type: "start", players });
     beginMatch();
 }
@@ -258,12 +277,12 @@ function returnToLobby() {
 function handleNetworkData(data, c) {
     if (role === "host") {
         if (data.type === "join") {
-            players[data.id] = { id: data.id, name: data.username, x: 50, y: 100, isGuard: false, alive: true, moving: false, peerId: c.peer };
+            players[data.id] = { id: data.id, name: data.username, x: 50, y: 100, isGuard: false, score: 0, moving: false, caughtDuringRed: false, peerId: c.peer };
             broadcast({ type: "sync", players });
             updateLobbyUI();
         }
         if (data.type === "input") {
-            if (players[data.id] && players[data.id].alive) {
+            if (players[data.id]) {
                 players[data.id].x = data.x;
                 players[data.id].y = data.y;
                 players[data.id].moving = data.moving;
@@ -280,6 +299,9 @@ function handleNetworkData(data, c) {
         if (data.type === "light-change") {
             currentLight = data.light;
             redLightStartTime = data.redStartTime;
+            if (currentLight === "GREEN") {
+                Object.values(players).forEach(p => p.caughtDuringRed = false);
+            }
             updateLightUI();
         }
         if (data.type === "state-update") {
@@ -289,11 +311,15 @@ function handleNetworkData(data, c) {
                     players[k].y = data.players[k].y;
                     players[k].moving = data.players[k].moving;
                 }
-                players[k].alive = data.players[k].alive;
+                players[k].score = data.players[k].score;
+                players[k].caughtDuringRed = data.players[k].caughtDuringRed;
             });
         }
-        if (data.type === "player-eliminated") {
-            if (players[data.id]) players[data.id].alive = false;
+        if (data.type === "player-reset") {
+            if (players[data.id]) {
+                players[data.id].x = data.x;
+                players[data.id].caughtDuringRed = false;
+            }
         }
         if (data.type === "end") { triggerEndGame(data.winnerName); }
     }
@@ -327,10 +353,10 @@ function beginMatch() {
     let isMeGuard = players[myId] && players[myId].isGuard;
     if (isMeGuard) {
         guardControls.style.display = "block";
-        roleDisplay.innerText = "ROLE: GUARD (Click moving players on Red Light)";
+        roleDisplay.innerText = "ROLE: GUARD (Tag players who moved on Red)";
     } else {
         guardControls.style.display = "none";
-        roleDisplay.innerText = "ROLE: SNEAKER (Reach the far side!)";
+        roleDisplay.innerText = "ROLE: SNEAKER (Cross line to score!)";
     }
 
     updateLightUI();
@@ -369,7 +395,7 @@ function gameLoop() {
 
 function processMovement() {
     let me = players[myId];
-    if (!me || me.isGuard || !me.alive) return;
+    if (!me || me.isGuard) return;
 
     let speed = 2.2;
     let dx = 0, dy = 0;
@@ -379,6 +405,14 @@ function processMovement() {
     if (keys['d'] || keys['arrowright']) dx = 1;
 
     me.moving = (dx !== 0 || dy !== 0);
+
+    // Track Red-Light Violations
+    if (currentLight === "RED") {
+        let timeSinceRed = Date.now() - redLightStartTime;
+        if (timeSinceRed > GRACE_PERIOD_MS && me.moving) {
+            me.caughtDuringRed = true; // Permanently flagged for this Red Light duration
+        }
+    }
 
     if (me.moving) {
         let len = Math.hypot(dx, dy);
@@ -390,20 +424,19 @@ function processMovement() {
 }
 
 function processRules() {
+    // Check line crossing (First player to 3 points wins match)
     Object.values(players).forEach(p => {
-        if (!p.isGuard && p.alive && p.x >= 700) {
-            broadcast({ type: "end", winnerName: p.name });
-            triggerEndGame(p.name);
+        if (!p.isGuard && p.x >= 700) {
+            p.score = (p.score || 0) + 1;
+            p.x = 50; // Reset position to start line
+            p.caughtDuringRed = false;
+
+            if (p.score >= 3) {
+                broadcast({ type: "end", winnerName: p.name });
+                triggerEndGame(p.name);
+            }
         }
     });
-
-    let aliveSneakers = Object.values(players).filter(p => !p.isGuard && p.alive);
-    if (aliveSneakers.length === 0 && Object.keys(players).length > 1) {
-        let guardObj = Object.values(players).find(p => p.isGuard);
-        let guardName = guardObj ? guardObj.name : "GUARD";
-        broadcast({ type: "end", winnerName: guardName });
-        triggerEndGame(guardName);
-    }
 }
 
 function triggerEndGame(winnerName) {
@@ -431,6 +464,7 @@ function triggerEndGame(winnerName) {
 function renderGraphics() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // Draw Finish Line
     ctx.strokeStyle = "#ff0055";
     ctx.lineWidth = 4;
     ctx.beginPath();
@@ -439,8 +473,6 @@ function renderGraphics() {
     ctx.stroke();
 
     Object.values(players).forEach(p => {
-        if (!p.alive) return;
-
         ctx.save();
         ctx.translate(p.x, p.y);
 
@@ -452,9 +484,9 @@ function renderGraphics() {
             ctx.arc(0, 0, 18, 0, Math.PI * 2);
             ctx.fill();
         } else {
-            ctx.fillStyle = "#00f0ff";
+            ctx.fillStyle = p.caughtDuringRed ? "#ff9900" : "#00f0ff";
             ctx.shadowBlur = p.moving ? 10 : 0;
-            ctx.shadowColor = "#00f0ff";
+            ctx.shadowColor = p.caughtDuringRed ? "#ff9900" : "#00f0ff";
             ctx.beginPath();
             ctx.arc(0, 0, 14, 0, Math.PI * 2);
             ctx.fill();
@@ -462,10 +494,12 @@ function renderGraphics() {
 
         ctx.restore();
 
+        // Name tag & Score
         ctx.fillStyle = "#ffffff";
         ctx.font = "11px sans-serif";
         ctx.textAlign = "center";
-        ctx.fillText(p.name, p.x, p.y - 22);
+        let text = p.isGuard ? `${p.name} [GUARD]` : `${p.name} (${p.score || 0} pts)`;
+        ctx.fillText(text, p.x, p.y - 22);
     });
 }
     </script>
