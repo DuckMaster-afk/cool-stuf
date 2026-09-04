@@ -48,13 +48,12 @@
         .light-red { background-color: #ff1744; color: #fff; box-shadow: 0 0 15px #ff1744; }
 
         .btn-exit {
-            background-color: #ef4444; color: #fff; border: none; padding: 6px 16px;
+            background-color: #ef4444; color: #fff; border: none; padding: 10px 20px;
             font-size: 0.9rem; border-radius: 20px; cursor: pointer; font-weight: bold;
             transition: all 0.2s ease;
         }
         .btn-exit:hover { background-color: #dc2626; box-shadow: 0 0 10px #ef4444; }
 
-        /* Guard Private Control Box (Only visible to the Guard) */
         #guard-controls {
             display: none; background: #161626; border: 1px solid #333355; border-radius: 8px;
             padding: 10px; margin-top: 10px; text-align: center;
@@ -77,43 +76,50 @@
     <div id="lobby">
         <h2>🚦 Red Light, Green Light</h2>
         
+        <!-- Main Username & Setup Screen -->
         <div id="setup-inputs">
             <input type="text" id="username-input" placeholder="Enter Username (Optional)">
             <button class="btn" id="btn-create">Create Room (Host / Guard)</button>
             <div style="margin: 10px 0; color: #444;">— OR —</div>
             <input type="text" id="room-code-input" placeholder="Enter Room Code">
             <button class="btn" id="btn-join" style="background-color: #ff0055; color: #fff;">Join Room (Sneaker)</button>
+            
+            <!-- Return to Home button directly on the entry screen -->
+            <button class="btn-exit" onclick="exitToRoot()" style="width: 100%; margin-top: 15px;">Return to Home</button>
         </div>
         
+        <!-- Lobby Waiting Area -->
         <div id="player-list-section" style="display:none; margin-top:15px;">
             <div style="font-weight:bold; color:#00f0ff;">Players connected (<span id="count">0</span>/8):</div>
             <div id="player-list"></div>
             <button class="btn" id="btn-start" style="background-color:#00e676; color:#000;" disabled>Start Match (Need 2+ Players)</button>
-            <button class="btn-exit" id="btn-exit-lobby" style="width: 100%; margin-top: 5px;">Exit to Root</button>
+            <button class="btn-exit" id="btn-exit-lobby" style="width: 100%; margin-top: 5px;">Return to Home</button>
         </div>
         <div id="status-msg">Initializing network link...</div>
     </div>
 
+    <!-- Gameplay Area -->
     <div id="game-container">
         <div id="hud">
             <div id="role-display" style="color:#00f0ff;">ROLE: SNEAKER</div>
             <div id="light-indicator" class="light-green">GREEN LIGHT</div>
-            <button class="btn-exit" id="btn-exit-game">Exit</button>
+            <button class="btn-exit" id="btn-exit-game" style="padding: 6px 16px;">Exit</button>
         </div>
         
         <canvas id="gameCanvas" width="800" height="500"></canvas>
         
-        <!-- Guard Controls: Rendered ONLY on the Guard's screen -->
+        <!-- Guard Controls -->
         <div id="guard-controls">
             <span style="font-size:0.9rem; color:#aaa; margin-right:10px;">GUARD CONTROLS:</span>
             <button class="btn-green" id="btn-set-green">CALL GREEN LIGHT</button>
             <button class="btn-red" id="btn-set-red">CALL RED LIGHT</button>
         </div>
 
+        <!-- End Game Overlay -->
         <div id="game-over-overlay">
             <h1 id="win-title" style="font-size:3rem; margin-bottom:10px; color:#00f0ff;">WINNER!</h1>
             <div style="display: flex; gap: 15px; width: 320px;">
-                <button class="btn" onclick="exitToRoot()" style="background-color:#ff1744; color:#fff;">Back to Root</button>
+                <button class="btn" onclick="exitToRoot()" style="background-color:#ff1744; color:#fff;">Return to Home</button>
             </div>
         </div>
     </div>
@@ -144,7 +150,7 @@
         let redLightStartTime = 0;
         let lastLightSwitchTime = 0;
         const GRACE_PERIOD_MS = 700; 
-        const LIGHT_COOLDOWN_MS = 1000; // 1 second cooldown for guard toggles
+        const LIGHT_COOLDOWN_MS = 1000;
 
         function exitToRoot() {
             window.location.href = "/";
@@ -208,7 +214,6 @@
             if (state === currentLight) return;
 
             let now = Date.now();
-            // Enforce 1-second cooldown between light changes
             if (now - lastLightSwitchTime < LIGHT_COOLDOWN_MS) return;
 
             lastLightSwitchTime = now;
@@ -217,7 +222,6 @@
             if (state === "RED") {
                 redLightStartTime = now;
             } else {
-                // Reset all caught flags when switching back to Green Light
                 Object.values(players).forEach(p => p.caughtDuringRed = false);
             }
 
@@ -236,9 +240,7 @@
                 if (!p.isGuard) {
                     let dist = Math.hypot(p.x - clickX, p.y - clickY);
                     if (dist < 20) { 
-                        // Guard can tag any player who moved during this Red Light phase
                         if (currentLight === "RED" && p.caughtDuringRed) {
-                            // Send caught player back to the start line
                             p.x = 50;
                             p.caughtDuringRed = false;
                             broadcast({ type: "player-reset", id: p.id, x: 50 });
@@ -254,7 +256,6 @@
 
         function startNewRound() {
             let pKeys = Object.keys(players);
-            // Pick a random Guard for every match
             let randomGuardId = pKeys[Math.floor(Math.random() * pKeys.length)];
 
             let sneakers = [];
@@ -266,11 +267,9 @@
                 if (!players[k].isGuard) sneakers.push(players[k]);
             });
 
-            // Guard Position
             players[randomGuardId].x = 740;
             players[randomGuardId].y = 250;
 
-            // Sneakers Position
             sneakers.forEach((p, idx) => {
                 p.x = 50;
                 p.y = 80 + idx * (340 / Math.max(1, sneakers.length - 1));
@@ -422,11 +421,10 @@
 
             me.moving = (dx !== 0 || dy !== 0);
 
-            // Track Red-Light Violations
             if (currentLight === "RED") {
                 let timeSinceRed = Date.now() - redLightStartTime;
                 if (timeSinceRed > GRACE_PERIOD_MS && me.moving) {
-                    me.caughtDuringRed = true; // Permanently flagged for this Red Light duration
+                    me.caughtDuringRed = true;
                 }
             }
 
@@ -440,11 +438,10 @@
         }
 
         function processRules() {
-            // Check line crossing (First player to 3 points wins match)
             Object.values(players).forEach(p => {
                 if (!p.isGuard && p.x >= 700) {
                     p.score = (p.score || 0) + 1;
-                    p.x = 50; // Reset position to start line
+                    p.x = 50;
                     p.caughtDuringRed = false;
 
                     if (p.score >= 3) {
@@ -458,29 +455,12 @@
         function triggerEndGame(winnerName) {
             gameRunning = false;
             document.getElementById("win-title").innerText = `${winnerName} WINS!`;
-            
-            let btnBox = gameOverOverlay.querySelector("div");
-            btnBox.innerHTML = `
-                <button class="btn" id="btn-return-lobby" style="background-color:#38b000; color:#fff;">Return to Lobby</button>
-                <button class="btn" onclick="exitToRoot()" style="background-color:#ef4444; color:#fff;">Leave to Root</button>
-            `;
-            
-            document.getElementById("btn-return-lobby").addEventListener("click", () => {
-                if (role === "host") {
-                    returnToLobby();
-                    broadcast({ type: "return-to-lobby" });
-                } else {
-                    conn.send({ type: "request-lobby" });
-                }
-            });
-
             gameOverOverlay.style.display = "flex";
         }
 
         function renderGraphics() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Draw Finish Line
             ctx.strokeStyle = "#ff0055";
             ctx.lineWidth = 4;
             ctx.beginPath();
@@ -510,7 +490,6 @@
 
                 ctx.restore();
 
-                // Name tag & Score
                 ctx.fillStyle = "#ffffff";
                 ctx.font = "11px sans-serif";
                 ctx.textAlign = "center";
